@@ -27,7 +27,8 @@ const RPlaceCanvas: React.FC = () => {
   const [hasInitiallyPositioned, setHasInitiallyPositioned] = useState(false);
   
   // Canvas configuration
-  const [gridSize, setGridSize] = useState(10);
+  const [canvasWidth, setCanvasWidth] = useState(10);
+  const [canvasHeight, setCanvasHeight] = useState(10);
   const [colors, setColors] = useState<string[]>([]);
   
   const [pixelSize] = useState(10);
@@ -65,6 +66,7 @@ const RPlaceCanvas: React.FC = () => {
   const canvasData = useQuery(api.functions.getCanvas, {});
   const paletteData = useQuery(api.functions.getPaletteColors, {});
   const initializeCanvas = useMutation(api.functions.initializeCanvas);
+  const resizeCanvas = useMutation(api.functions.resizeCanvas); // NEW: Add resize mutation
   const updatePixel = useMutation(api.functions.updatePixel);
   
   const zoomFactor = Math.pow(maxZoom / minZoom, 1/9);
@@ -94,19 +96,19 @@ const RPlaceCanvas: React.FC = () => {
     const pixelX = Math.floor((screenCenterX - panX) / scale);
     const pixelY = Math.floor((screenCenterY - panY) / scale);
     
-    const clampedX = Math.max(0, Math.min(gridSize - 1, pixelX));
-    const clampedY = Math.max(0, Math.min(gridSize - 1, pixelY));
+    const clampedX = Math.max(0, Math.min(canvasWidth - 1, pixelX));
+    const clampedY = Math.max(0, Math.min(canvasHeight - 1, pixelY));
     
     return { x: clampedX, y: clampedY };
-  }, [zoom, pixelSize, panX, panY, gridSize]);
+  }, [zoom, pixelSize, panX, panY, canvasWidth, canvasHeight]);
   
   const screenToPixel = (screenX: number, screenY: number): Position => {
     const scale = zoom * pixelSize;
     const pixelX = Math.floor((screenX - panX) / scale);
     const pixelY = Math.floor((screenY - panY) / scale);
     
-    const clampedX = Math.max(0, Math.min(gridSize - 1, pixelX));
-    const clampedY = Math.max(0, Math.min(gridSize - 1, pixelY));
+    const clampedX = Math.max(0, Math.min(canvasWidth - 1, pixelX));
+    const clampedY = Math.max(0, Math.min(canvasHeight - 1, pixelY));
     
     return { x: clampedX, y: clampedY };
   };
@@ -124,21 +126,21 @@ const RPlaceCanvas: React.FC = () => {
   
   const constrainPan = useCallback((newPanX: number, newPanY: number, currentZoom: number): Position => {
     const scale = currentZoom * pixelSize;
-    const canvasWidth = gridSize * scale;
-    const canvasHeight = gridSize * scale;
+    const canvasPixelWidth = canvasWidth * scale;
+    const canvasPixelHeight = canvasHeight * scale;
     const screenWidth = window.innerWidth;
     const screenHeight = window.innerHeight;
     
     const maxPanX = screenWidth / 2;
-    const minPanX = screenWidth / 2 - canvasWidth;
+    const minPanX = screenWidth / 2 - canvasPixelWidth;
     const maxPanY = screenHeight / 2;
-    const minPanY = screenHeight / 2 - canvasHeight;
+    const minPanY = screenHeight / 2 - canvasPixelHeight;
     
     return {
       x: Math.max(minPanX, Math.min(maxPanX, newPanX)),
       y: Math.max(minPanY, Math.min(maxPanY, newPanY))
     };
-  }, [pixelSize, gridSize]);
+  }, [pixelSize, canvasWidth, canvasHeight]);
   
   // Canvas operations
   const updateSinglePixel = (x: number, y: number, color: string) => {
@@ -148,7 +150,7 @@ const RPlaceCanvas: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    const index = y * gridSize + x;
+    const index = y * canvasWidth + x;
     const newData = [...pixelData];
     newData[index] = color;
     setPixelData(newData);
@@ -343,7 +345,7 @@ const RPlaceCanvas: React.FC = () => {
         break;
       case 'ArrowDown':
         e.preventDefault();
-        const newYDown = Math.min(gridSize - 1, currentCoords.y + 1);
+        const newYDown = Math.min(canvasHeight - 1, currentCoords.y + 1);
         animateToPixel(currentCoords.x, newYDown);
         break;
       case 'ArrowLeft':
@@ -353,7 +355,7 @@ const RPlaceCanvas: React.FC = () => {
         break;
       case 'ArrowRight':
         e.preventDefault();
-        const newXRight = Math.min(gridSize - 1, currentCoords.x + 1);
+        const newXRight = Math.min(canvasWidth - 1, currentCoords.x + 1);
         animateToPixel(newXRight, currentCoords.y);
         break;
       case '=':
@@ -386,7 +388,7 @@ const RPlaceCanvas: React.FC = () => {
         }
         break;
     }
-  }, [isLoading, getPositionCoords, animateToPixel, gridSize, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel]);
+  }, [isLoading, getPositionCoords, animateToPixel, canvasWidth, canvasHeight, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel]);
   
   // Initialize canvas from Convex data
   useEffect(() => {
@@ -395,9 +397,7 @@ const RPlaceCanvas: React.FC = () => {
       
       if (!canvasData && !isInitialized) {
         try {
-          await initializeCanvas({
-            size: 10,
-          });
+          await initializeCanvas({});
           setIsInitialized(true);
         } catch (error) {
           // Error handled silently
@@ -406,14 +406,26 @@ const RPlaceCanvas: React.FC = () => {
       }
       
       if (canvasData && paletteData) {
-        setGridSize(canvasData.size);
+        // NEW: Handle resize if needed
+        if (canvasData.needsResize) {
+          try {
+            await resizeCanvas({});
+            // After resize, the data will be refetched automatically by Convex
+            return;
+          } catch (error) {
+            // Error handled silently, continue with current data
+          }
+        }
+        
+        setCanvasWidth(canvasData.width);
+        setCanvasHeight(canvasData.height);
         setColors(paletteData);
         setPixelData(canvasData.pixels);
         
         // Only center the canvas on initial load, not on subsequent updates
         if (!hasInitiallyPositioned) {
-          const initialPanX = (window.innerWidth - canvasData.size * pixelSize) / 2;
-          const initialPanY = (window.innerHeight - canvasData.size * pixelSize) / 2;
+          const initialPanX = (window.innerWidth - canvasData.width * pixelSize) / 2;
+          const initialPanY = (window.innerHeight - canvasData.height * pixelSize) / 2;
           setPanX(initialPanX);
           setPanY(initialPanY);
           setHasInitiallyPositioned(true);
@@ -427,26 +439,26 @@ const RPlaceCanvas: React.FC = () => {
     };
     
     initCanvas();
-  }, [canvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned]);
+  }, [canvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned, resizeCanvas]);
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
-    if (isLoading || !pixelData.length || !gridSize) return;
+    if (isLoading || !pixelData.length || !canvasWidth || !canvasHeight) return;
     
     const canvas = canvasRef.current;
     if (!canvas) return;
     
     try {
-      canvas.width = gridSize;
-      canvas.height = gridSize;
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
         // Clear the canvas first
-        ctx.clearRect(0, 0, gridSize, gridSize);
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         
         // Render all pixels from data
-        const imageData = ctx.createImageData(gridSize, gridSize);
+        const imageData = ctx.createImageData(canvasWidth, canvasHeight);
         
         for (let i = 0; i < pixelData.length; i++) {
           const color = hexToRgb(pixelData[i]);
@@ -462,7 +474,7 @@ const RPlaceCanvas: React.FC = () => {
     } catch (error) {
       // Error handled silently
     }
-  }, [isLoading, pixelData, gridSize]);
+  }, [isLoading, pixelData, canvasWidth, canvasHeight]);
   
   useEffect(() => {
     let animationId: number;
