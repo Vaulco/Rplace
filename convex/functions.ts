@@ -60,7 +60,7 @@ const decompressPixelData = (compressed: string, expectedLength: number): string
   return pixels.slice(0, expectedLength);
 };
 
-// Get the canvas data with palette from environment variable
+// Get the canvas data
 export const getCanvas = query({
   args: { name: v.string() },
   handler: async (ctx, args) => {
@@ -70,25 +70,11 @@ export const getCanvas = query({
       .first();
     
     if (canvas) {
-      // Get palette from environment variable
-      const paletteString = process.env.PALETTE;
-      let palette: string[] = [];
-      
-      if (paletteString) {
-        try {
-          palette = JSON.parse(paletteString);
-        } catch (error) {
-          console.error("Failed to parse PALETTE environment variable:", error);
-          palette = ["#000000", "#FFFFFF"]; // Fallback to basic colors
-        }
-      }
-      
       // Decompress pixel data before returning
       const decompressedPixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
       return {
         ...canvas,
         pixels: decompressedPixels,
-        palette: palette,
       };
     }
     
@@ -101,6 +87,7 @@ export const initializeCanvas = mutation({
   args: {
     name: v.string(),
     size: v.number(),
+    palette: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const existingCanvas = await ctx.db
@@ -119,6 +106,7 @@ export const initializeCanvas = mutation({
     const canvasId = await ctx.db.insert("canvas", {
       name: args.name,
       size: args.size,
+      palette: args.palette,
       pixels: compressedPixels,
     });
 

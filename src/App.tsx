@@ -28,7 +28,15 @@ const RPlaceCanvas: React.FC = () => {
   
   // Canvas configuration - these will come from Convex
   const [gridSize, setGridSize] = useState(10);
-  const [colors, setColors] = useState<string[]>([]);
+  const [colors, setColors] = useState([
+    '#000000', '#696969', '#555555', '#808080',
+    '#D3D3D3', '#FFFFFF', '#FF9999', '#CC3333',
+    '#DC143C', '#990000', '#800000', '#FF5700',
+    '#CCFF8C', '#81DE76', '#006F3C', '#3A55B4',
+    '#6CADDF', '#8CD9FF', '#00FFFF', '#B77DFF',
+    '#BE45FF', '#FA3983', '#FF9900', '#FFE600',
+    '#573400'
+  ]);
   
   const [pixelSize] = useState(10);
   const [minZoom] = useState(0.05);
@@ -137,54 +145,19 @@ const RPlaceCanvas: React.FC = () => {
     };
   }, [pixelSize, gridSize]);
   
-  // Canvas rendering function
-  const renderCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !pixelData.length) return;
-    
-    try {
-      canvas.width = gridSize;
-      canvas.height = gridSize;
-      
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        // Render all pixels from data
-        const imageData = ctx.createImageData(gridSize, gridSize);
-        
-        for (let i = 0; i < pixelData.length; i++) {
-          const color = hexToRgb(pixelData[i]);
-          const pixelIndex = i * 4;
-          imageData.data[pixelIndex] = color.r;
-          imageData.data[pixelIndex + 1] = color.g;
-          imageData.data[pixelIndex + 2] = color.b;
-          imageData.data[pixelIndex + 3] = 255;
-        }
-        
-        ctx.putImageData(imageData, 0, 0);
-        console.log('Canvas rendered with', pixelData.length, 'pixels');
-      } else {
-        console.error('Could not get canvas context');
-      }
-    } catch (error) {
-      console.error('Error in canvas rendering:', error);
-    }
-  }, [pixelData, gridSize]);
-
   // Canvas operations
-  const updateSinglePixel = async (x: number, y: number, color: string) => {
+  const updateSinglePixel = (x: number, y: number, color: string) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    // Optimistic update - update local state immediately
     const index = y * gridSize + x;
     const newData = [...pixelData];
     newData[index] = color;
     setPixelData(newData);
     
-    // Update canvas immediately for visual feedback
     const rgb = hexToRgb(color);
     const imageData = ctx.createImageData(1, 1);
     imageData.data[0] = rgb.r;
@@ -194,18 +167,8 @@ const RPlaceCanvas: React.FC = () => {
     
     ctx.putImageData(imageData, x, y);
     
-    // Update Convex
-    try {
-      await updatePixel({ name: "canvas", x, y, color });
-      console.log(`Successfully updated pixel at (${x}, ${y}) to ${color}`);
-    } catch (error) {
-      console.error('Failed to update pixel:', error);
-      // Revert optimistic update on error
-      const revertedData = [...pixelData];
-      setPixelData(revertedData);
-      // Re-render the canvas with original data
-      renderCanvas();
-    }
+    // Update Convex (fire and forget - optimistic update already applied)
+    updatePixel({ name: "canvas", x, y, color }).catch(console.error);
   };
   
   const updateSelectionBorder = () => {
@@ -286,12 +249,11 @@ const RPlaceCanvas: React.FC = () => {
     setSelectedColor(null);
   };
   
-  const placePixel = async () => {
+  const placePixel = () => {
     if (!selectedColor) return;
     
     const coords = getPositionCoords();
-    console.log(`Placing pixel at (${coords.x}, ${coords.y}) with color ${selectedColor}`);
-    await updateSinglePixel(coords.x, coords.y, selectedColor);
+    updateSinglePixel(coords.x, coords.y, selectedColor);
     closeColorPanel();
   };
   
@@ -441,6 +403,7 @@ const RPlaceCanvas: React.FC = () => {
           await initializeCanvas({
             name: "canvas",
             size: 10,
+            palette: colors,
           });
           setIsInitialized(true);
         } catch (error) {
@@ -451,10 +414,7 @@ const RPlaceCanvas: React.FC = () => {
       
       if (canvasData) {
         setGridSize(canvasData.size);
-        setColors(canvasData.palette || []);
-        
-        // Update pixel data and re-render canvas when data changes
-        console.log('Updating pixel data from Convex:', canvasData.pixels.length, 'pixels');
+        setColors(canvasData.palette);
         setPixelData(canvasData.pixels);
         
         // Only center the canvas on initial load, not on subsequent updates
@@ -474,13 +434,43 @@ const RPlaceCanvas: React.FC = () => {
     };
     
     initCanvas();
-  }, [canvasData, isInitialized, pixelSize, hasInitiallyPositioned]);
+  }, [canvasData, isInitialized, colors, pixelSize, hasInitiallyPositioned]);
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
     if (isLoading || !pixelData.length) return;
-    renderCanvas();
-  }, [isLoading, renderCanvas]);
+    
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    
+    try {
+      canvas.width = gridSize;
+      canvas.height = gridSize;
+      
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        // Render all pixels from data
+        const imageData = ctx.createImageData(gridSize, gridSize);
+        
+        for (let i = 0; i < pixelData.length; i++) {
+          const color = hexToRgb(pixelData[i]);
+          const pixelIndex = i * 4;
+          imageData.data[pixelIndex] = color.r;
+          imageData.data[pixelIndex + 1] = color.g;
+          imageData.data[pixelIndex + 2] = color.b;
+          imageData.data[pixelIndex + 3] = 255;
+        }
+        
+        ctx.putImageData(imageData, 0, 0);
+      } else {
+        console.error('Could not get canvas context');
+      }
+    } catch (error) {
+      console.error('Error in canvas setup:', error);
+    }
+  }, [isLoading, pixelData, gridSize]);
   
   useEffect(() => {
     let animationId: number;
