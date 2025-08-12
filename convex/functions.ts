@@ -29,22 +29,6 @@ export function readPalette(): string[] {
   }
 }
 
-export function readCanvasSize(): number {
-  const sizeString = process.env.CANVAS_SIZE;
-  
-  if (!sizeString) {
-    throw new Error("CANVAS_SIZE environment variable is not set");
-  }
-  
-  const size = parseInt(sizeString, 10);
-  
-  if (isNaN(size) || size <= 0 || size > 1000) {
-    throw new Error("CANVAS_SIZE must be a number between 1 and 1000");
-  }
-  
-  return size;
-}
-
 const compressPixelData = (pixels: string[]): string => {
   if (pixels.length === 0) return '';
   
@@ -121,8 +105,6 @@ export const getPalette = query({
 export const getCanvas = query({
   args: {},
   handler: async (ctx) => {
-    const size = readCanvasSize();
-    
     // Get the first (and presumably only) canvas
     const canvas = await ctx.db
       .query("canvas")
@@ -133,17 +115,21 @@ export const getCanvas = query({
     }
 
     return {
-      size,
-      pixels: decompressPixelData(canvas.pixels, size * size),
+      ...canvas,
+      pixels: decompressPixelData(canvas.pixels, canvas.size * canvas.size),
       palette: readPalette(),
     };
   },
 });
 
 export const initializeCanvas = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const size = readCanvasSize();
+  args: {
+    size: v.number(),
+  },
+  handler: async (ctx, { size }) => {
+    if (size <= 0 || size > 1000) {
+      throw new Error("Canvas size must be between 1 and 1000");
+    }
 
     // Check if a canvas already exists
     const existingCanvas = await ctx.db
@@ -158,6 +144,7 @@ export const initializeCanvas = mutation({
     const compressedPixels = compressPixelData(initialPixels);
 
     const canvasId = await ctx.db.insert("canvas", {
+      size,
       pixels: compressedPixels,
     });
 
@@ -172,8 +159,6 @@ export const updatePixel = mutation({
     color: v.string(),
   },
   handler: async (ctx, { x, y, color }) => {
-    const size = readCanvasSize();
-    
     const canvas = await ctx.db
       .query("canvas")
       .first();
@@ -182,11 +167,11 @@ export const updatePixel = mutation({
       throw new Error("Canvas not found");
     }
 
-    validateCoordinates(x, y, size);
+    validateCoordinates(x, y, canvas.size);
     validateColor(color, readPalette());
 
-    const pixels = decompressPixelData(canvas.pixels, size * size);
-    const pixelIndex = y * size + x;
+    const pixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
+    const pixelIndex = y * canvas.size + x;
     pixels[pixelIndex] = color;
 
     await ctx.db.patch(canvas._id, {
@@ -210,8 +195,6 @@ export const updatePixels = mutation({
       return { success: true };
     }
 
-    const size = readCanvasSize();
-    
     const canvas = await ctx.db
       .query("canvas")
       .first();
@@ -223,14 +206,14 @@ export const updatePixels = mutation({
     const palette = readPalette();
 
     for (const update of updates) {
-      validateCoordinates(update.x, update.y, size);
+      validateCoordinates(update.x, update.y, canvas.size);
       validateColor(update.color, palette);
     }
 
-    const pixels = decompressPixelData(canvas.pixels, size * size);
+    const pixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
     
     for (const update of updates) {
-      const pixelIndex = update.y * size + update.x;
+      const pixelIndex = update.y * canvas.size + update.x;
       pixels[pixelIndex] = update.color;
     }
 
