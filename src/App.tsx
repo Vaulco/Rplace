@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import loader from './assets/rplace-loader.gif'; // Assuming you have a loading animation SVG
+import selectpixel from './assets/selected.svg'; // Assuming you have a selection border SVG
 
 interface Position {
   x: number;
@@ -577,7 +578,7 @@ const RPlaceCanvas: React.FC = () => {
         
         <img
           ref={selectionBorderRef}
-          src="/src/assets/selected.svg"
+          src={selectpixel}
           alt="Selection Border"
           className="absolute pointer-events-none z-50 pixelated"
         />
