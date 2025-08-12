@@ -62,21 +62,12 @@ const RPlaceCanvas: React.FC = () => {
   const [pixelData, setPixelData] = useState<string[]>([]);
   
   // Convex queries and mutations
-  const canvasData = useQuery(api.functions.getCanvas, { name: "canvas" });
+  const canvasData = useQuery(api.functions.getCanvas, {});
   const paletteData = useQuery(api.functions.getPaletteColors, {});
   const initializeCanvas = useMutation(api.functions.initializeCanvas);
   const updatePixel = useMutation(api.functions.updatePixel);
   
   const zoomFactor = Math.pow(maxZoom / minZoom, 1/9);
-  
-  // Add debug logging
-  useEffect(() => {
-    console.log("Canvas data:", canvasData);
-    console.log("Palette data:", paletteData);
-    console.log("Pixel data length:", pixelData.length);
-    console.log("Grid size:", gridSize);
-    console.log("Is loading:", isLoading);
-  }, [canvasData, paletteData, pixelData, gridSize, isLoading]);
   
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
@@ -172,7 +163,7 @@ const RPlaceCanvas: React.FC = () => {
     ctx.putImageData(imageData, x, y);
     
     // Update Convex (fire and forget - optimistic update already applied)
-    updatePixel({ name: "canvas", x, y, color }).catch(console.error);
+    updatePixel({ x, y, color }).catch(() => {});
   };
   
   const updateSelectionBorder = () => {
@@ -405,18 +396,16 @@ const RPlaceCanvas: React.FC = () => {
       if (!canvasData && !isInitialized) {
         try {
           await initializeCanvas({
-            name: "canvas",
             size: 10,
           });
           setIsInitialized(true);
         } catch (error) {
-          console.error('Failed to initialize canvas:', error);
+          // Error handled silently
         }
         return;
       }
       
       if (canvasData && paletteData) {
-        console.log("Setting up canvas with data:", { canvasData, paletteData });
         setGridSize(canvasData.size);
         setColors(paletteData);
         setPixelData(canvasData.pixels);
@@ -442,15 +431,10 @@ const RPlaceCanvas: React.FC = () => {
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
-    console.log("Canvas rendering effect triggered", { isLoading, pixelDataLength: pixelData.length, gridSize });
-    
     if (isLoading || !pixelData.length || !gridSize) return;
     
     const canvas = canvasRef.current;
-    if (!canvas) {
-      console.error('Canvas ref is null');
-      return;
-    }
+    if (!canvas) return;
     
     try {
       canvas.width = gridSize;
@@ -458,8 +442,6 @@ const RPlaceCanvas: React.FC = () => {
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        console.log(`Rendering ${pixelData.length} pixels to ${gridSize}x${gridSize} canvas`);
-        
         // Clear the canvas first
         ctx.clearRect(0, 0, gridSize, gridSize);
         
@@ -476,12 +458,9 @@ const RPlaceCanvas: React.FC = () => {
         }
         
         ctx.putImageData(imageData, 0, 0);
-        console.log('Canvas rendered successfully');
-      } else {
-        console.error('Could not get canvas context');
       }
     } catch (error) {
-      console.error('Error in canvas setup:', error);
+      // Error handled silently
     }
   }, [isLoading, pixelData, gridSize]);
   
@@ -567,11 +546,6 @@ const RPlaceCanvas: React.FC = () => {
               alt="Loading animation" 
               className="max-w-full max-h-full object-contain"
             /> 
-          </div>
-          <div className="text-black text-sm">
-            Canvas: {canvasData ? 'loaded' : 'loading...'}
-            <br />
-            Palette: {paletteData ? 'loaded' : 'loading...'}
           </div>
         </div>
       </div>

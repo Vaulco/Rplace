@@ -83,11 +83,10 @@ export const getPaletteColors = query({
 
 // Get the canvas data
 export const getCanvas = query({
-  args: { name: v.string() },
-  handler: async (ctx, args) => {
+  args: {},
+  handler: async (ctx) => {
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
     
     if (canvas) {
@@ -107,13 +106,11 @@ export const getCanvas = query({
 // Initialize canvas if it doesn't exist
 export const initializeCanvas = mutation({
   args: {
-    name: v.string(),
     size: v.number(),
   },
   handler: async (ctx, args) => {
     const existingCanvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
 
     if (existingCanvas) {
@@ -125,7 +122,6 @@ export const initializeCanvas = mutation({
     const compressedPixels = compressPixelData(initialPixels);
 
     const canvasId = await ctx.db.insert("canvas", {
-      name: args.name,
       size: args.size,
       pixels: compressedPixels,
     });
@@ -137,7 +133,6 @@ export const initializeCanvas = mutation({
 // Update a single pixel
 export const updatePixel = mutation({
   args: {
-    name: v.string(),
     x: v.number(),
     y: v.number(),
     color: v.string(),
@@ -145,7 +140,6 @@ export const updatePixel = mutation({
   handler: async (ctx, args) => {
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
 
     if (!canvas) {
@@ -169,7 +163,6 @@ export const updatePixel = mutation({
 // Batch update multiple pixels (for potential future use)
 export const updatePixels = mutation({
   args: {
-    name: v.string(),
     updates: v.array(v.object({
       x: v.number(),
       y: v.number(),
@@ -179,7 +172,6 @@ export const updatePixels = mutation({
   handler: async (ctx, args) => {
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
 
     if (!canvas) {
