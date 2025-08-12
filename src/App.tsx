@@ -62,7 +62,7 @@ const RPlaceCanvas: React.FC = () => {
   const [pixelData, setPixelData] = useState<string[]>([]);
   
   // Convex queries and mutations
-  const canvasData = useQuery(api.functions.getCanvas, { name: "canvas" });
+  const canvasData = useQuery(api.functions.getCanvas, {});
   const initializeCanvas = useMutation(api.functions.initializeCanvas);
   const updatePixel = useMutation(api.functions.updatePixel);
   
@@ -160,7 +160,7 @@ const RPlaceCanvas: React.FC = () => {
     ctx.putImageData(imageData, x, y);
     
     // Update Convex (fire and forget - optimistic update already applied)
-    updatePixel({ name: "canvas", x, y, color }).catch(console.error);
+    updatePixel({ x, y, color }).catch(console.error);
   };
   
   const updateSelectionBorder = () => {
@@ -392,10 +392,7 @@ const RPlaceCanvas: React.FC = () => {
       
       if (!canvasData && !isInitialized) {
         try {
-          await initializeCanvas({
-            name: "canvas",
-            size: 20,
-          });
+          await initializeCanvas();
           setIsInitialized(true);
         } catch (error) {
           console.error('Failed to initialize canvas:', error);

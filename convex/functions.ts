@@ -29,6 +29,22 @@ export function readPalette(): string[] {
   }
 }
 
+export function readCanvasSize(): number {
+  const sizeString = process.env.CANVAS_SIZE;
+  
+  if (!sizeString) {
+    throw new Error("CANVAS_SIZE environment variable is not set");
+  }
+  
+  const size = parseInt(sizeString, 10);
+  
+  if (isNaN(size) || size <= 0 || size > 1000) {
+    throw new Error("CANVAS_SIZE must be a number between 1 and 1000");
+  }
+  
+  return size;
+}
+
 const compressPixelData = (pixels: string[]): string => {
   if (pixels.length === 0) return '';
   
@@ -103,11 +119,13 @@ export const getPalette = query({
 });
 
 export const getCanvas = query({
-  args: { name: v.string() },
-  handler: async (ctx, { name }) => {
+  args: {},
+  handler: async (ctx) => {
+    const size = readCanvasSize();
+    
+    // Get the first (and presumably only) canvas
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (!canvas) {
@@ -115,26 +133,21 @@ export const getCanvas = query({
     }
 
     return {
-      ...canvas,
-      pixels: decompressPixelData(canvas.pixels, canvas.size * canvas.size),
+      size,
+      pixels: decompressPixelData(canvas.pixels, size * size),
       palette: readPalette(),
     };
   },
 });
 
 export const initializeCanvas = mutation({
-  args: {
-    name: v.string(),
-    size: v.number(),
-  },
-  handler: async (ctx, { name, size }) => {
-    if (size <= 0 || size > 1000) {
-      throw new Error("Canvas size must be between 1 and 1000");
-    }
+  args: {},
+  handler: async (ctx) => {
+    const size = readCanvasSize();
 
+    // Check if a canvas already exists
     const existingCanvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (existingCanvas) {
@@ -145,8 +158,6 @@ export const initializeCanvas = mutation({
     const compressedPixels = compressPixelData(initialPixels);
 
     const canvasId = await ctx.db.insert("canvas", {
-      name,
-      size,
       pixels: compressedPixels,
     });
 
@@ -156,26 +167,26 @@ export const initializeCanvas = mutation({
 
 export const updatePixel = mutation({
   args: {
-    name: v.string(),
     x: v.number(),
     y: v.number(),
     color: v.string(),
   },
-  handler: async (ctx, { name, x, y, color }) => {
+  handler: async (ctx, { x, y, color }) => {
+    const size = readCanvasSize();
+    
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (!canvas) {
       throw new Error("Canvas not found");
     }
 
-    validateCoordinates(x, y, canvas.size);
+    validateCoordinates(x, y, size);
     validateColor(color, readPalette());
 
-    const pixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
-    const pixelIndex = y * canvas.size + x;
+    const pixels = decompressPixelData(canvas.pixels, size * size);
+    const pixelIndex = y * size + x;
     pixels[pixelIndex] = color;
 
     await ctx.db.patch(canvas._id, {
@@ -188,21 +199,21 @@ export const updatePixel = mutation({
 
 export const updatePixels = mutation({
   args: {
-    name: v.string(),
     updates: v.array(v.object({
       x: v.number(),
       y: v.number(),
       color: v.string(),
     })),
   },
-  handler: async (ctx, { name, updates }) => {
+  handler: async (ctx, { updates }) => {
     if (updates.length === 0) {
       return { success: true };
     }
 
+    const size = readCanvasSize();
+    
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (!canvas) {
@@ -212,14 +223,14 @@ export const updatePixels = mutation({
     const palette = readPalette();
 
     for (const update of updates) {
-      validateCoordinates(update.x, update.y, canvas.size);
+      validateCoordinates(update.x, update.y, size);
       validateColor(update.color, palette);
     }
 
-    const pixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
+    const pixels = decompressPixelData(canvas.pixels, size * size);
     
     for (const update of updates) {
-      const pixelIndex = update.y * canvas.size + update.x;
+      const pixelIndex = update.y * size + update.x;
       pixels[pixelIndex] = update.color;
     }
 
