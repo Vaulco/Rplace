@@ -31,6 +31,12 @@ const getSize = (): { width: number; height: number } => {
   }
 };
 
+// Helper function to validate color is in palette
+const isValidColor = (color: string): boolean => {
+  const palette = getPalette();
+  return palette.includes(color);
+};
+
 // Helper functions for pixel data compression
 const compressPixelData = (pixels: string[]): string => {
   // Simple run-length encoding for repeated colors
@@ -260,6 +266,11 @@ export const updatePixel = mutation({
     color: v.string(),
   },
   handler: async (ctx, args) => {
+    // Validate that the color is in the current palette
+    if (!isValidColor(args.color)) {
+      throw new Error(`Invalid color: ${args.color}. Color must be one of the palette colors.`);
+    }
+
     const { width, height } = getSize();
     const canvas = await ctx.db
       .query("canvas")
@@ -285,49 +296,6 @@ export const updatePixel = mutation({
         pixels: compressedWithSize,
       });
     }
-
-    return { success: true };
-  },
-});
-
-// Batch update multiple pixels (for potential future use)
-export const updatePixels = mutation({
-  args: {
-    updates: v.array(v.object({
-      x: v.number(),
-      y: v.number(),
-      color: v.string(),
-    })),
-  },
-  handler: async (ctx, args) => {
-    const { width, height } = getSize();
-    const canvas = await ctx.db
-      .query("canvas")
-      .first();
-
-    if (!canvas) {
-      throw new Error("Canvas not found");
-    }
-
-    // Extract size and compressed data
-    const { compressed } = extractSizeFromCompressed(canvas.pixels);
-    
-    // Decompress, update, and recompress
-    const pixels = decompressPixelData(compressed, width * height);
-    
-    args.updates.forEach(update => {
-      const index = update.y * width + update.x;
-      if (index >= 0 && index < pixels.length) {
-        pixels[index] = update.color;
-      }
-    });
-
-    const compressedPixels = compressPixelData(pixels);
-    const compressedWithSize = addSizeToCompressed(compressedPixels, width, height);
-
-    await ctx.db.patch(canvas._id, {
-      pixels: compressedWithSize,
-    });
 
     return { success: true };
   },
