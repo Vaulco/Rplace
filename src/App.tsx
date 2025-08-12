@@ -27,7 +27,7 @@ const RPlaceCanvas: React.FC = () => {
   const [hasInitiallyPositioned, setHasInitiallyPositioned] = useState(false);
   
   // Canvas configuration - these will come from Convex
-  const [gridSize, setGridSize] = useState(10);
+  const [gridSize, setGridSize] = useState(20);
   const [colors, setColors] = useState([
     '#000000', '#696969', '#555555', '#808080',
     '#D3D3D3', '#FFFFFF', '#FF9999', '#CC3333',
@@ -402,7 +402,7 @@ const RPlaceCanvas: React.FC = () => {
         try {
           await initializeCanvas({
             name: "canvas",
-            size: 10,
+            size: 20,
             palette: colors,
           });
           setIsInitialized(true);
