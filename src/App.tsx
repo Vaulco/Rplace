@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
-import loader from './assets/rplace-loader.gif'; // Assuming you have a loading animation SVG
-import selectpixel from './assets/selected.svg'; // Assuming you have a selection border SVG
+import loader from './assets/rplace-loader.gif';
+import selectpixel from './assets/selected.svg';
 
 interface Position {
   x: number;
@@ -26,7 +26,7 @@ const RPlaceCanvas: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasInitiallyPositioned, setHasInitiallyPositioned] = useState(false);
   
-  // Canvas configuration - these will come from Convex
+  // Canvas configuration
   const [gridSize, setGridSize] = useState(10);
   const [colors, setColors] = useState<string[]>([]);
   
@@ -63,10 +63,20 @@ const RPlaceCanvas: React.FC = () => {
   
   // Convex queries and mutations
   const canvasData = useQuery(api.functions.getCanvas, { name: "canvas" });
+  const paletteData = useQuery(api.functions.getPaletteColors, {});
   const initializeCanvas = useMutation(api.functions.initializeCanvas);
   const updatePixel = useMutation(api.functions.updatePixel);
   
   const zoomFactor = Math.pow(maxZoom / minZoom, 1/9);
+  
+  // Add debug logging
+  useEffect(() => {
+    console.log("Canvas data:", canvasData);
+    console.log("Palette data:", paletteData);
+    console.log("Pixel data length:", pixelData.length);
+    console.log("Grid size:", gridSize);
+    console.log("Is loading:", isLoading);
+  }, [canvasData, paletteData, pixelData, gridSize, isLoading]);
   
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
@@ -388,7 +398,7 @@ const RPlaceCanvas: React.FC = () => {
   // Initialize canvas from Convex data
   useEffect(() => {
     const initCanvas = async () => {
-      if (canvasData === undefined) return; // Still loading
+      if (canvasData === undefined || paletteData === undefined) return; // Still loading
       
       if (!canvasData && !isInitialized) {
         try {
@@ -403,9 +413,10 @@ const RPlaceCanvas: React.FC = () => {
         return;
       }
       
-      if (canvasData) {
+      if (canvasData && paletteData) {
+        console.log("Setting up canvas with data:", { canvasData, paletteData });
         setGridSize(canvasData.size);
-        setColors(canvasData.palette);
+        setColors(paletteData);
         setPixelData(canvasData.pixels);
         
         // Only center the canvas on initial load, not on subsequent updates
@@ -425,14 +436,17 @@ const RPlaceCanvas: React.FC = () => {
     };
     
     initCanvas();
-  }, [canvasData, isInitialized, pixelSize, hasInitiallyPositioned]);
+  }, [canvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned]);
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
-    if (isLoading || !pixelData.length) return;
+    console.log("Canvas rendering effect triggered", { isLoading, pixelDataLength: pixelData.length, gridSize });
+    
+    if (isLoading || !pixelData.length || !gridSize) return;
     
     const canvas = canvasRef.current;
     if (!canvas) {
+      console.error('Canvas ref is null');
       return;
     }
     
@@ -442,6 +456,11 @@ const RPlaceCanvas: React.FC = () => {
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
+        console.log(`Rendering ${pixelData.length} pixels to ${gridSize}x${gridSize} canvas`);
+        
+        // Clear the canvas first
+        ctx.clearRect(0, 0, gridSize, gridSize);
+        
         // Render all pixels from data
         const imageData = ctx.createImageData(gridSize, gridSize);
         
@@ -455,6 +474,7 @@ const RPlaceCanvas: React.FC = () => {
         }
         
         ctx.putImageData(imageData, 0, 0);
+        console.log('Canvas rendered successfully');
       } else {
         console.error('Could not get canvas context');
       }
@@ -546,7 +566,11 @@ const RPlaceCanvas: React.FC = () => {
               className="max-w-full max-h-full object-contain"
             /> 
           </div>
-
+          <div className="text-black text-sm">
+            Canvas: {canvasData ? 'loaded' : 'loading...'}
+            <br />
+            Palette: {paletteData ? 'loaded' : 'loading...'}
+          </div>
         </div>
       </div>
     );
