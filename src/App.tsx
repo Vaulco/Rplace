@@ -26,9 +26,9 @@ const RPlaceCanvas: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasInitiallyPositioned, setHasInitiallyPositioned] = useState(false);
   
-  // Canvas configuration
-  const [canvasWidth, setCanvasWidth] = useState(10);
-  const [canvasHeight, setCanvasHeight] = useState(10);
+  // Canvas configuration - Initialize with 0 instead of 10
+  const [canvasWidth, setCanvasWidth] = useState(0);
+  const [canvasHeight, setCanvasHeight] = useState(0);
   const [colors, setColors] = useState<string[]>([]);
   
   const [pixelSize] = useState(10);
@@ -66,10 +66,19 @@ const RPlaceCanvas: React.FC = () => {
   const canvasData = useQuery(api.functions.getCanvas, {});
   const paletteData = useQuery(api.functions.getPaletteColors, {});
   const initializeCanvas = useMutation(api.functions.initializeCanvas);
-  const resizeCanvas = useMutation(api.functions.resizeCanvas); // NEW: Add resize mutation
+  const resizeCanvas = useMutation(api.functions.resizeCanvas);
   const updatePixel = useMutation(api.functions.updatePixel);
   
   const zoomFactor = Math.pow(maxZoom / minZoom, 1/9);
+  
+  // Keybind mapping for color selection (1-9, a-z)
+  const colorKeybinds = '123456789abcdefghijklmnopqrstuvwxyz';
+  
+  // Helper function to get color index from key
+  const getColorIndexFromKey = (key: string): number => {
+    const index = colorKeybinds.indexOf(key.toLowerCase());
+    return index !== -1 && index < colors.length ? index : -1;
+  };
   
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
@@ -201,7 +210,7 @@ const RPlaceCanvas: React.FC = () => {
   
   // Zoom functions
   const zoomIn = useCallback(() => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     setIsAnimating(false);
     const newZoom = Math.min(maxZoom, zoom * zoomFactor);
@@ -216,10 +225,10 @@ const RPlaceCanvas: React.FC = () => {
       setPanY(constrained.y);
       setZoom(newZoom);
     }
-  }, [isLoading, maxZoom, zoom, zoomFactor, panX, panY, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, maxZoom, zoom, zoomFactor, panX, panY, constrainPan]);
 
   const zoomOut = useCallback(() => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     setIsAnimating(false);
     const newZoom = Math.max(minZoom, zoom / zoomFactor);
@@ -234,7 +243,7 @@ const RPlaceCanvas: React.FC = () => {
       setPanY(constrained.y);
       setZoom(newZoom);
     }
-  }, [isLoading, minZoom, zoom, zoomFactor, panX, panY, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, minZoom, zoom, zoomFactor, panX, panY, constrainPan]);
   
   // UI functions
   const openColorPanel = () => {
@@ -244,6 +253,13 @@ const RPlaceCanvas: React.FC = () => {
   const closeColorPanel = () => {
     setIsPanelOpen(false);
     setSelectedColor(null);
+  };
+  
+  const selectColorByIndex = (index: number) => {
+    if (index >= 0 && index < colors.length) {
+      setSelectedColor(colors[index]);
+      setIsPanelOpen(true);
+    }
   };
   
   const placePixel = () => {
@@ -256,7 +272,7 @@ const RPlaceCanvas: React.FC = () => {
   
   // Event handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     setIsAnimating(false);
     setIsDragging(true);
@@ -268,7 +284,7 @@ const RPlaceCanvas: React.FC = () => {
   };
   
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (isLoading || !isDragging) return;
+    if (isLoading || !canvasWidth || !canvasHeight || !isDragging) return;
     
     const deltaX = e.clientX - lastMouseX;
     const deltaY = e.clientY - lastMouseY;
@@ -282,10 +298,10 @@ const RPlaceCanvas: React.FC = () => {
     
     setLastMouseX(e.clientX);
     setLastMouseY(e.clientY);
-  }, [isLoading, isDragging, lastMouseX, lastMouseY, panX, panY, zoom, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, lastMouseX, lastMouseY, panX, panY, zoom, constrainPan]);
   
   const handleMouseUp = useCallback((e: MouseEvent) => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     if (isDragging) {
       setIsDragging(false);
@@ -303,10 +319,10 @@ const RPlaceCanvas: React.FC = () => {
         animateToPixel(pixelCoords.x, pixelCoords.y);
       }
     }
-  }, [isLoading, isDragging, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
   
   const handleWheel = useCallback((e: WheelEvent) => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     e.preventDefault();
     setIsAnimating(false);
@@ -330,10 +346,18 @@ const RPlaceCanvas: React.FC = () => {
       setPanY(constrained.y);
       setZoom(newZoom);
     }
-  }, [isLoading, zoom, panX, panY, zoomFactor, minZoom, maxZoom, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, zoom, panX, panY, zoomFactor, minZoom, maxZoom, constrainPan]);
   
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
+    
+    // Check if this is a color selection key
+    const colorIndex = getColorIndexFromKey(e.key);
+    if (colorIndex !== -1) {
+      e.preventDefault();
+      selectColorByIndex(colorIndex);
+      return;
+    }
     
     const currentCoords = getPositionCoords();
     
@@ -388,7 +412,7 @@ const RPlaceCanvas: React.FC = () => {
         }
         break;
     }
-  }, [isLoading, getPositionCoords, animateToPixel, canvasWidth, canvasHeight, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel]);
+  }, [isLoading, canvasWidth, canvasHeight, getPositionCoords, animateToPixel, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel, colors, getColorIndexFromKey, selectColorByIndex]);
   
   // Initialize canvas from Convex data
   useEffect(() => {
@@ -406,7 +430,7 @@ const RPlaceCanvas: React.FC = () => {
       }
       
       if (canvasData && paletteData) {
-        // NEW: Handle resize if needed
+        // Handle resize if needed
         if (canvasData.needsResize) {
           try {
             await resizeCanvas({});
@@ -510,7 +534,7 @@ const RPlaceCanvas: React.FC = () => {
   }, [isAnimating, animationStartTime, startPanX, startPanY, targetPanX, targetPanY, zoom, constrainPan]);
   
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -520,7 +544,7 @@ const RPlaceCanvas: React.FC = () => {
     canvas.style.transformOrigin = '0 0';
     
     updateSelectionBorder();
-  }, [panX, panY, zoom, pixelSize, isLoading, getPositionCoords]);
+  }, [panX, panY, zoom, pixelSize, isLoading, canvasWidth, canvasHeight, getPositionCoords]);
   
   useEffect(() => {
     const container = containerRef.current;
@@ -545,10 +569,11 @@ const RPlaceCanvas: React.FC = () => {
     };
   }, [handleMouseMove, handleMouseUp, handleKeyDown]);
   
-  const currentPosition = getPositionCoords();
+  // Only calculate position if we have valid canvas dimensions
+  const currentPosition = canvasWidth && canvasHeight ? getPositionCoords() : { x: 0, y: 0 };
   
-  // Render loading screen
-  if (isLoading) {
+  // Render loading screen - now includes canvas dimension check
+  if (isLoading || !canvasWidth || !canvasHeight) {
     return (
       <div className="w-screen h-screen bg-white flex items-center justify-center">
         <div className="flex flex-col items-center gap-6">
@@ -604,19 +629,26 @@ const RPlaceCanvas: React.FC = () => {
         isPanelOpen ? 'transform translate-y-0' : 'transform translate-y-full'
       }`}>
         <div className="flex w-full h-[60px] p-3 box-border">
-          {colors.map((color, index) => (
-            <div
-              key={index}
-              className={`h-full cursor-pointer transition-all border-2 ${
-                selectedColor === color ? 'border-gray-800' : 'border-white'
-              }`}
-              style={{
-                backgroundColor: color,
-                flex: '1 1 0%'
-              }}
-              onClick={() => setSelectedColor(color)}
-            />
-          ))}
+          {colors.map((color, index) => {
+            // Get the keybind for this color index
+            const keybind = index < colorKeybinds.length ? colorKeybinds[index] : null;
+            
+            return (
+              <div
+                key={index}
+                className={`h-full cursor-pointer transition-all border-2 relative ${
+                  selectedColor === color ? 'border-gray-800' : 'border-white'
+                }`}
+                style={{
+                  backgroundColor: color,
+                  flex: '1 1 0%'
+                }}
+                onClick={() => setSelectedColor(color)}
+                title={keybind ? `Press '${keybind}' to select` : 'No keybind available'}
+              >
+              </div>
+            );
+          })}
         </div>
         <div className="flex justify-center gap-5 mb-3">
           <button
