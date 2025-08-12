@@ -1,16 +1,18 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
-// Default color palette - centralized configuration
-const DEFAULT_PALETTE = [
-  '#000000', '#696969', '#555555', '#808080',
-  '#D3D3D3', '#FFFFFF', '#FF9999', '#CC3333',
-  '#DC143C', '#990000', '#800000', '#FF5700',
-  '#CCFF8C', '#81DE76', '#006F3C', '#3A55B4',
-  '#6CADDF', '#8CD9FF', '#00FFFF', '#B77DFF',
-  '#BE45FF', '#FA3983', '#FF9900', '#FFE600',
-  '#573400'
-];
+// Get palette from environment variables
+const getPalette = (): string[] => {
+  const paletteEnv = process.env.PALETTE;
+  if (!paletteEnv) {
+    throw new Error("PALETTE environment variable not set");
+  }
+  try {
+    return JSON.parse(paletteEnv);
+  } catch (error) {
+    throw new Error("Invalid PALETTE environment variable format");
+  }
+};
 
 // Helper functions for pixel data compression
 const compressPixelData = (pixels: string[]): string => {
@@ -71,6 +73,14 @@ const decompressPixelData = (compressed: string, expectedLength: number): string
   return pixels.slice(0, expectedLength);
 };
 
+// Get the palette
+export const getPaletteColors = query({
+  args: {},
+  handler: async (ctx, args) => {
+    return getPalette();
+  },
+});
+
 // Get the canvas data
 export const getCanvas = query({
   args: { name: v.string() },
@@ -86,6 +96,7 @@ export const getCanvas = query({
       return {
         ...canvas,
         pixels: decompressedPixels,
+        palette: getPalette(), // Add palette from env vars
       };
     }
     
@@ -116,7 +127,6 @@ export const initializeCanvas = mutation({
     const canvasId = await ctx.db.insert("canvas", {
       name: args.name,
       size: args.size,
-      palette: DEFAULT_PALETTE,
       pixels: compressedPixels,
     });
 
