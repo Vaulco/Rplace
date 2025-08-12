@@ -1,73 +1,49 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
-const DEFAULT_PIXEL_COLOR = '#FFFFFF';
-const MAX_RUN_LENGTH = 999;
-const COMPRESSION_DELIMITER = '|';
-const COUNT_SEPARATOR = ':';
-
-export function readPalette(): string[] {
-  const paletteString = process.env.CANVAS_PALETTE;
-  
-  if (!paletteString) {
-    throw new Error("CANVAS_PALETTE environment variable is not set");
-  }
-  
-  try {
-    const palette = JSON.parse(paletteString);
-    
-    if (!Array.isArray(palette) || palette.length === 0) {
-      throw new Error("CANVAS_PALETTE must be a non-empty array of color strings");
-    }
-    
-    return palette;
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error("Invalid CANVAS_PALETTE format - must be valid JSON array of color strings");
-    }
-    throw error;
-  }
-}
-
+// Helper functions for pixel data compression
 const compressPixelData = (pixels: string[]): string => {
-  if (pixels.length === 0) return '';
-  
+  // Simple run-length encoding for repeated colors
   const compressed: string[] = [];
   let currentColor = pixels[0];
   let count = 1;
   
   for (let i = 1; i < pixels.length; i++) {
-    if (pixels[i] === currentColor && count < MAX_RUN_LENGTH) {
+    if (pixels[i] === currentColor && count < 999) {
       count++;
     } else {
-      compressed.push(count === 1 ? currentColor : `${count}${COUNT_SEPARATOR}${currentColor}`);
+      if (count === 1) {
+        compressed.push(currentColor);
+      } else {
+        compressed.push(`${count}:${currentColor}`);
+      }
       currentColor = pixels[i];
       count = 1;
     }
   }
   
-  compressed.push(count === 1 ? currentColor : `${count}${COUNT_SEPARATOR}${currentColor}`);
+  // Don't forget the last group
+  if (count === 1) {
+    compressed.push(currentColor);
+  } else {
+    compressed.push(`${count}:${currentColor}`);
+  }
   
-  return compressed.join(COMPRESSION_DELIMITER);
+  return compressed.join('|');
 };
 
 const decompressPixelData = (compressed: string, expectedLength: number): string[] => {
   if (!compressed) {
-    return new Array(expectedLength).fill(DEFAULT_PIXEL_COLOR);
+    return new Array(expectedLength).fill('#FFFFFF');
   }
   
   const pixels: string[] = [];
-  const parts = compressed.split(COMPRESSION_DELIMITER);
+  const parts = compressed.split('|');
   
   for (const part of parts) {
-    if (part.includes(COUNT_SEPARATOR)) {
-      const [countStr, color] = part.split(COUNT_SEPARATOR, 2);
+    if (part.includes(':')) {
+      const [countStr, color] = part.split(':');
       const count = parseInt(countStr, 10);
-      
-      if (isNaN(count) || count <= 0) {
-        throw new Error(`Invalid compression format: invalid count ${countStr}`);
-      }
-      
       for (let i = 0; i < count; i++) {
         pixels.push(color);
       }
@@ -76,77 +52,73 @@ const decompressPixelData = (compressed: string, expectedLength: number): string
     }
   }
   
+  // Ensure we have the exact expected length
   while (pixels.length < expectedLength) {
-    pixels.push(DEFAULT_PIXEL_COLOR);
+    pixels.push('#FFFFFF');
   }
   
   return pixels.slice(0, expectedLength);
 };
 
-const validateCoordinates = (x: number, y: number, size: number): void => {
-  if (x < 0 || x >= size || y < 0 || y >= size) {
-    throw new Error(`Coordinates (${x}, ${y}) are outside canvas bounds (${size}x${size})`);
-  }
-};
-
-const validateColor = (color: string, palette: string[]): void => {
-  if (!palette.includes(color)) {
-    throw new Error(`Invalid color: ${color} not in palette`);
-  }
-};
-
-export const getPalette = query({
-  args: {},
-  handler: async () => {
-    return readPalette();
-  },
-});
-
+// Get the canvas data with palette from environment variable
 export const getCanvas = query({
   args: { name: v.string() },
-  handler: async (ctx, { name }) => {
+  handler: async (ctx, args) => {
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
+      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
-
-    if (!canvas) {
-      return null;
+    
+    if (canvas) {
+      // Get palette from environment variable
+      const paletteString = process.env.PALETTE;
+      let palette: string[] = [];
+      
+      if (paletteString) {
+        try {
+          palette = JSON.parse(paletteString);
+        } catch (error) {
+          console.error("Failed to parse PALETTE environment variable:", error);
+          palette = ["#000000", "#FFFFFF"]; // Fallback to basic colors
+        }
+      }
+      
+      // Decompress pixel data before returning
+      const decompressedPixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
+      return {
+        ...canvas,
+        pixels: decompressedPixels,
+        palette: palette,
+      };
     }
-
-    return {
-      ...canvas,
-      pixels: decompressPixelData(canvas.pixels, canvas.size * canvas.size),
-      palette: readPalette(),
-    };
+    
+    return canvas;
   },
 });
 
+// Initialize canvas if it doesn't exist
 export const initializeCanvas = mutation({
   args: {
     name: v.string(),
     size: v.number(),
   },
-  handler: async (ctx, { name, size }) => {
-    if (size <= 0 || size > 1000) {
-      throw new Error("Canvas size must be between 1 and 1000");
-    }
-
+  handler: async (ctx, args) => {
     const existingCanvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
+      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
 
     if (existingCanvas) {
       return existingCanvas._id;
     }
 
-    const initialPixels = new Array(size * size).fill(DEFAULT_PIXEL_COLOR);
+    // Create initial pixel data (all white) and compress it
+    const initialPixels = new Array(args.size * args.size).fill('#FFFFFF');
     const compressedPixels = compressPixelData(initialPixels);
 
     const canvasId = await ctx.db.insert("canvas", {
-      name,
-      size,
+      name: args.name,
+      size: args.size,
       pixels: compressedPixels,
     });
 
@@ -154,6 +126,7 @@ export const initializeCanvas = mutation({
   },
 });
 
+// Update a single pixel
 export const updatePixel = mutation({
   args: {
     name: v.string(),
@@ -161,31 +134,31 @@ export const updatePixel = mutation({
     y: v.number(),
     color: v.string(),
   },
-  handler: async (ctx, { name, x, y, color }) => {
+  handler: async (ctx, args) => {
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
+      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
 
     if (!canvas) {
       throw new Error("Canvas not found");
     }
 
-    validateCoordinates(x, y, canvas.size);
-    validateColor(color, readPalette());
-
+    // Decompress, update, and recompress
     const pixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
-    const pixelIndex = y * canvas.size + x;
-    pixels[pixelIndex] = color;
+    const index = args.y * canvas.size + args.x;
+    pixels[index] = args.color;
+    const compressedPixels = compressPixelData(pixels);
 
     await ctx.db.patch(canvas._id, {
-      pixels: compressPixelData(pixels),
+      pixels: compressedPixels,
     });
 
     return { success: true };
   },
 });
 
+// Batch update multiple pixels (for potential future use)
 export const updatePixels = mutation({
   args: {
     name: v.string(),
@@ -195,36 +168,28 @@ export const updatePixels = mutation({
       color: v.string(),
     })),
   },
-  handler: async (ctx, { name, updates }) => {
-    if (updates.length === 0) {
-      return { success: true };
-    }
-
+  handler: async (ctx, args) => {
     const canvas = await ctx.db
       .query("canvas")
-      .filter((q) => q.eq(q.field("name"), name))
+      .filter((q) => q.eq(q.field("name"), args.name))
       .first();
 
     if (!canvas) {
       throw new Error("Canvas not found");
     }
 
-    const palette = readPalette();
-
-    for (const update of updates) {
-      validateCoordinates(update.x, update.y, canvas.size);
-      validateColor(update.color, palette);
-    }
-
+    // Decompress, update, and recompress
     const pixels = decompressPixelData(canvas.pixels, canvas.size * canvas.size);
     
-    for (const update of updates) {
-      const pixelIndex = update.y * canvas.size + update.x;
-      pixels[pixelIndex] = update.color;
-    }
+    args.updates.forEach(update => {
+      const index = update.y * canvas.size + update.x;
+      pixels[index] = update.color;
+    });
+
+    const compressedPixels = compressPixelData(pixels);
 
     await ctx.db.patch(canvas._id, {
-      pixels: compressPixelData(pixels),
+      pixels: compressedPixels,
     });
 
     return { success: true };
