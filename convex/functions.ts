@@ -103,11 +103,11 @@ export const getPalette = query({
 });
 
 export const getCanvas = query({
-  args: {},
-  handler: async (ctx) => {
-    // Get the first (and presumably only) canvas
+  args: { name: v.string() },
+  handler: async (ctx, { name }) => {
     const canvas = await ctx.db
       .query("canvas")
+      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (!canvas) {
@@ -124,16 +124,17 @@ export const getCanvas = query({
 
 export const initializeCanvas = mutation({
   args: {
+    name: v.string(),
     size: v.number(),
   },
-  handler: async (ctx, { size }) => {
+  handler: async (ctx, { name, size }) => {
     if (size <= 0 || size > 1000) {
       throw new Error("Canvas size must be between 1 and 1000");
     }
 
-    // Check if a canvas already exists
     const existingCanvas = await ctx.db
       .query("canvas")
+      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (existingCanvas) {
@@ -144,6 +145,7 @@ export const initializeCanvas = mutation({
     const compressedPixels = compressPixelData(initialPixels);
 
     const canvasId = await ctx.db.insert("canvas", {
+      name,
       size,
       pixels: compressedPixels,
     });
@@ -154,13 +156,15 @@ export const initializeCanvas = mutation({
 
 export const updatePixel = mutation({
   args: {
+    name: v.string(),
     x: v.number(),
     y: v.number(),
     color: v.string(),
   },
-  handler: async (ctx, { x, y, color }) => {
+  handler: async (ctx, { name, x, y, color }) => {
     const canvas = await ctx.db
       .query("canvas")
+      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (!canvas) {
@@ -184,19 +188,21 @@ export const updatePixel = mutation({
 
 export const updatePixels = mutation({
   args: {
+    name: v.string(),
     updates: v.array(v.object({
       x: v.number(),
       y: v.number(),
       color: v.string(),
     })),
   },
-  handler: async (ctx, { updates }) => {
+  handler: async (ctx, { name, updates }) => {
     if (updates.length === 0) {
       return { success: true };
     }
 
     const canvas = await ctx.db
       .query("canvas")
+      .filter((q) => q.eq(q.field("name"), name))
       .first();
 
     if (!canvas) {
