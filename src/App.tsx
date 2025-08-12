@@ -80,7 +80,9 @@ const RPlaceCanvas: React.FC = () => {
   
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    // Trim whitespace and ensure we have a clean hex string
+    const cleanHex = hex.trim();
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(cleanHex);
     return result ? {
       r: parseInt(result[1], 16),
       g: parseInt(result[2], 16),
