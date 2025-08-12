@@ -28,15 +28,7 @@ const RPlaceCanvas: React.FC = () => {
   
   // Canvas configuration - these will come from Convex
   const [gridSize, setGridSize] = useState(20);
-  const [colors, setColors] = useState([
-    '#000000', '#696969', '#555555', '#808080',
-    '#D3D3D3', '#FFFFFF', '#FF9999', '#CC3333',
-    '#DC143C', '#990000', '#800000', '#FF5700',
-    '#CCFF8C', '#81DE76', '#006F3C', '#3A55B4',
-    '#6CADDF', '#8CD9FF', '#00FFFF', '#B77DFF',
-    '#BE45FF', '#FA3983', '#FF9900', '#FFE600',
-    '#573400'
-  ]);
+  const [colors, setColors] = useState<string[]>([]);
   
   const [pixelSize] = useState(10);
   const [minZoom] = useState(0.05);
@@ -403,7 +395,6 @@ const RPlaceCanvas: React.FC = () => {
           await initializeCanvas({
             name: "canvas",
             size: 20,
-            palette: colors,
           });
           setIsInitialized(true);
         } catch (error) {
@@ -414,7 +405,7 @@ const RPlaceCanvas: React.FC = () => {
       
       if (canvasData) {
         setGridSize(canvasData.size);
-        setColors(canvasData.palette);
+        setColors(canvasData.palette || []); // Get palette from Convex response
         setPixelData(canvasData.pixels);
         
         // Only center the canvas on initial load, not on subsequent updates
@@ -434,7 +425,7 @@ const RPlaceCanvas: React.FC = () => {
     };
     
     initCanvas();
-  }, [canvasData, isInitialized, colors, pixelSize, hasInitiallyPositioned]);
+  }, [canvasData, isInitialized, pixelSize, hasInitiallyPositioned]);
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
