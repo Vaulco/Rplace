@@ -76,7 +76,7 @@ const decompressPixelData = (compressed: string, expectedLength: number): string
 // Get the palette
 export const getPaletteColors = query({
   args: {},
-  handler: async (ctx, args) => {
+  handler: async () => {
     return getPalette();
   },
 });
