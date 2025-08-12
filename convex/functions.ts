@@ -1,6 +1,17 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+// Default color palette - centralized configuration
+const DEFAULT_PALETTE = [
+  '#000000', '#696969', '#555555', '#808080',
+  '#D3D3D3', '#FFFFFF', '#FF9999', '#CC3333',
+  '#DC143C', '#990000', '#800000', '#FF5700',
+  '#CCFF8C', '#81DE76', '#006F3C', '#3A55B4',
+  '#6CADDF', '#8CD9FF', '#00FFFF', '#B77DFF',
+  '#BE45FF', '#FA3983', '#FF9900', '#FFE600',
+  '#573400'
+];
+
 // Helper functions for pixel data compression
 const compressPixelData = (pixels: string[]): string => {
   // Simple run-length encoding for repeated colors
@@ -87,7 +98,6 @@ export const initializeCanvas = mutation({
   args: {
     name: v.string(),
     size: v.number(),
-    palette: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const existingCanvas = await ctx.db
@@ -106,7 +116,7 @@ export const initializeCanvas = mutation({
     const canvasId = await ctx.db.insert("canvas", {
       name: args.name,
       size: args.size,
-      palette: args.palette,
+      palette: DEFAULT_PALETTE,
       pixels: compressedPixels,
     });
 
