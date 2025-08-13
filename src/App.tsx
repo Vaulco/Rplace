@@ -429,10 +429,10 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       clearLongPressTimer();
       
       const distance = getTouchDistance(newTouches[0], newTouches[1]);
-      const center = getTouchCenter(newTouches[0], newTouches[1]);
+
       
       if (lastTouchDistance > 0) {
-        const zoomMultiplier = distance / lastTouchDistance;
+        
         const newZoom = Math.max(minZoom, Math.min(maxZoom, initialPinchZoom * (distance / lastTouchDistance)));
         
         if (newZoom !== zoom) {
