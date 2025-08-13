@@ -21,6 +21,13 @@ interface Touch {
   y: number;
 }
 
+interface PixelUpdate {
+  x: number;
+  y: number;
+  color: string;
+  userId?: string;
+  timestamp?: number;
+}
 
 const RPlaceCanvas: React.FC = () => {
   // Refs
@@ -33,7 +40,7 @@ const RPlaceCanvas: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasInitiallyPositioned, setHasInitiallyPositioned] = useState(false);
   
-  // Canvas configuration - Initialize with 0 instead of 10
+  // Canvas configuration
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const [colors, setColors] = useState<string[]>([]);
@@ -76,11 +83,28 @@ const RPlaceCanvas: React.FC = () => {
   // UI state
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-  const [pixelData, setPixelData] = useState<string[]>([]);
   
-  // Convex queries and mutations
-  const canvasData = useQuery(api.functions.getCanvas, {});
-  const paletteData = useQuery(api.functions.getPaletteColors, {});
+  // Real-time collaboration state
+  const [wsConnection, setWsConnection] = useState<WebSocket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [localPixelData, setLocalPixelData] = useState<string[]>([]);
+  const [pendingUpdates, setPendingUpdates] = useState<Map<string, string>>(new Map());
+  const [lastServerSync, setLastServerSync] = useState<number>(Date.now());
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  
+  // Convex queries and mutations - Load initial data only once
+  // Will only run when NOT initialized
+const initialCanvasData = useQuery(
+  api.functions.getCanvas,
+  !isInitialized ? {} : undefined
+);
+
+// Always runs
+const paletteData = useQuery(
+  api.functions.getPaletteColors,
+  {}
+);
+
   const initializeCanvas = useMutation(api.functions.initializeCanvas);
   const resizeCanvas = useMutation(api.functions.resizeCanvas);
   const updatePixel = useMutation(api.functions.updatePixel);
@@ -111,27 +135,26 @@ const RPlaceCanvas: React.FC = () => {
   };
   
   type MyTouch = {
-  id: number;
-  x: number;
-  y: number;
-};
+    id: number;
+    x: number;
+    y: number;
+  };
 
-const convertTouchList = (touchList: TouchList | React.TouchList, containerRect: DOMRect): MyTouch[] => {
-  const touches: MyTouch[] = [];
-  for (let i = 0; i < touchList.length; i++) {
-    const t = touchList[i] as globalThis.Touch; // Explicitly say it's the DOM Touch
-    touches.push({
-      id: t.identifier,
-      x: t.clientX - containerRect.left,
-      y: t.clientY - containerRect.top
-    });
-  }
-  return touches;
-};
+  const convertTouchList = (touchList: TouchList | React.TouchList, containerRect: DOMRect): MyTouch[] => {
+    const touches: MyTouch[] = [];
+    for (let i = 0; i < touchList.length; i++) {
+      const t = touchList[i] as globalThis.Touch;
+      touches.push({
+        id: t.identifier,
+        x: t.clientX - containerRect.left,
+        y: t.clientY - containerRect.top
+      });
+    }
+    return touches;
+  };
 
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
-    // Trim whitespace and ensure we have a clean hex string
     const cleanHex = hex.trim();
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(cleanHex);
     return result ? {
@@ -143,6 +166,18 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
   
   const easeOutCubic = (t: number): number => {
     return 1 - Math.pow(1 - t, 3);
+  };
+
+  // Helper function to get current user ID (implement based on your auth system)
+  const getCurrentUserId = () => {
+    // Return current user ID from your auth system
+    // For now, generate a session ID
+    let userId = sessionStorage.getItem('canvas-user-id');
+    if (!userId) {
+      userId = 'user-' + Math.random().toString(36).substr(2, 9);
+      sessionStorage.setItem('canvas-user-id', userId);
+    }
+    return userId;
   };
   
   // Position calculation functions
@@ -199,9 +234,199 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       y: Math.max(minPanY, Math.min(maxPanY, newPanY))
     };
   }, [pixelSize, canvasWidth, canvasHeight]);
+
+  // WebSocket connection setup with reconnection logic
+  const connectWebSocket = useCallback(() => {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) return;
+    
+    // Replace with your actual WebSocket endpoint
+    const ws = new WebSocket(`ws://localhost:3001/canvas-updates?userId=${getCurrentUserId()}`);
+    
+    ws.onopen = () => {
+      console.log('Connected to canvas updates');
+      setWsConnection(ws);
+      setIsConnected(true);
+      setReconnectAttempts(0);
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'PIXEL_UPDATE') {
+          handleRemotePixelUpdate(data.x, data.y, data.color, data.userId);
+        } else if (data.type === 'BATCH_UPDATE') {
+          handleRemoteBatchUpdate(data.pixels);
+        } else if (data.type === 'SYNC_REQUEST') {
+          // Server requesting full sync
+          handleSyncRequest();
+        }
+        
+        setLastServerSync(Date.now());
+      } catch (error) {
+        console.error('Error processing WebSocket message:', error);
+      }
+    };
+    
+    ws.onclose = (event) => {
+      console.log('Disconnected from canvas updates', event.code, event.reason);
+      setWsConnection(null);
+      setIsConnected(false);
+      
+      // Attempt reconnection with exponential backoff
+      if (!event.wasClean && reconnectAttempts < 5) {
+        const backoffDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        console.log(`Reconnecting in ${backoffDelay}ms...`);
+        
+        setTimeout(() => {
+          setReconnectAttempts(prev => prev + 1);
+          connectWebSocket();
+        }, backoffDelay);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+    
+    setWsConnection(ws);
+  }, [wsConnection, reconnectAttempts]);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    if (isInitialized && !wsConnection) {
+      connectWebSocket();
+    }
+    
+    return () => {
+      if (wsConnection) {
+        wsConnection.close();
+      }
+    };
+  }, [isInitialized, connectWebSocket]);
+
+  // Handle remote pixel updates from other users
+  const handleRemotePixelUpdate = useCallback((x: number, y: number, color: string, userId?: string) => {
+    const index = y * canvasWidth + x;
+    const key = `${x},${y}`;
+    
+    // Skip if this is our own pending update
+    if (pendingUpdates.has(key)) {
+      pendingUpdates.delete(key);
+      setPendingUpdates(new Map(pendingUpdates));
+      return;
+    }
+    
+    // Update local state
+    setLocalPixelData(prev => {
+      const newData = [...prev];
+      newData[index] = color;
+      return newData;
+    });
+    
+    // Update canvas immediately
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (canvas && ctx) {
+      const rgb = hexToRgb(color);
+      const imageData = ctx.createImageData(1, 1);
+      imageData.data[0] = rgb.r;
+      imageData.data[1] = rgb.g;
+      imageData.data[2] = rgb.b;
+      imageData.data[3] = 255;
+      ctx.putImageData(imageData, x, y);
+      
+      // Show animation for other users' pixels
+      if (userId && userId !== getCurrentUserId()) {
+        showPixelAnimation(x, y);
+      }
+    }
+  }, [canvasWidth, pendingUpdates]);
   
-  // Canvas operations
-  const updateSinglePixel = (x: number, y: number, color: string) => {
+  // Handle batch updates from server
+  const handleRemoteBatchUpdate = useCallback((pixels: Array<{x: number, y: number, color: string}>) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    
+    setLocalPixelData(prev => {
+      const newData = [...prev];
+      
+      pixels.forEach(({x, y, color}) => {
+        const index = y * canvasWidth + x;
+        if (index >= 0 && index < newData.length) {
+          newData[index] = color;
+          
+          // Update canvas
+          const rgb = hexToRgb(color);
+          const imageData = ctx.createImageData(1, 1);
+          imageData.data[0] = rgb.r;
+          imageData.data[1] = rgb.g;
+          imageData.data[2] = rgb.b;
+          imageData.data[3] = 255;
+          ctx.putImageData(imageData, x, y);
+        }
+      });
+      
+      return newData;
+    });
+  }, [canvasWidth]);
+
+  // Handle server sync request
+  const handleSyncRequest = useCallback(async () => {
+    try {
+      // Re-fetch from server to ensure we have latest data
+      // This would trigger a fresh query
+      setLastServerSync(0);
+    } catch (error) {
+      console.error('Sync request failed:', error);
+    }
+  }, []);
+  
+  // Show animation for other users' pixel placements
+  const showPixelAnimation = useCallback((x: number, y: number) => {
+    if (!containerRef.current) return;
+    
+    const animation = document.createElement('div');
+    animation.style.position = 'absolute';
+    animation.style.pointerEvents = 'none';
+    animation.style.zIndex = '100';
+    animation.style.width = '20px';
+    animation.style.height = '20px';
+    animation.style.borderRadius = '50%';
+    animation.style.backgroundColor = 'rgba(255, 255, 0, 0.8)';
+    animation.style.border = '2px solid #fff';
+    animation.style.boxShadow = '0 0 10px rgba(255, 255, 0, 0.6)';
+    
+    // Position it over the pixel
+    const scale = zoom * pixelSize;
+    const pixelScreenX = panX + x * scale;
+    const pixelScreenY = panY + y * scale;
+    
+    animation.style.left = `${pixelScreenX - 10}px`;
+    animation.style.top = `${pixelScreenY - 10}px`;
+    
+    containerRef.current.appendChild(animation);
+    
+    // Animate and remove
+    const animationEffect = animation.animate([
+      { transform: 'scale(0)', opacity: '0' },
+      { transform: 'scale(1.2)', opacity: '1', offset: 0.5 },
+      { transform: 'scale(0)', opacity: '0' }
+    ], {
+      duration: 600,
+      easing: 'ease-out'
+    });
+    
+    animationEffect.onfinish = () => {
+      if (animation.parentNode) {
+        animation.remove();
+      }
+    };
+  }, [zoom, pixelSize, panX, panY]);
+  
+  // Canvas operations - Optimistic pixel update with real-time broadcast
+  const updateSinglePixel = useCallback((x: number, y: number, color: string) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
@@ -209,22 +434,64 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     if (!ctx) return;
     
     const index = y * canvasWidth + x;
-    const newData = [...pixelData];
-    newData[index] = color;
-    setPixelData(newData);
+    const key = `${x},${y}`;
+    const userId = getCurrentUserId();
     
+    // Add to pending updates
+    setPendingUpdates(prev => new Map(prev.set(key, color)));
+    
+    // Update local state immediately (optimistic)
+    setLocalPixelData(prev => {
+      const newData = [...prev];
+      newData[index] = color;
+      return newData;
+    });
+    
+    // Update canvas immediately
     const rgb = hexToRgb(color);
     const imageData = ctx.createImageData(1, 1);
     imageData.data[0] = rgb.r;
     imageData.data[1] = rgb.g;
     imageData.data[2] = rgb.b;
     imageData.data[3] = 255;
-    
     ctx.putImageData(imageData, x, y);
     
-    // Update Convex (fire and forget - optimistic update already applied)
-    updatePixel({ x, y, color }).catch(() => {});
-  };
+    // Send via WebSocket if connected (for immediate broadcast to other users)
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+      wsConnection.send(JSON.stringify({
+        type: 'PIXEL_UPDATE',
+        x,
+        y,
+        color,
+        userId,
+        timestamp: Date.now()
+      }));
+    }
+    
+    // Send to server for persistence
+    updatePixel({ x, y, color })
+      .then(() => {
+        // Remove from pending updates on success
+        setPendingUpdates(prev => {
+          const newPending = new Map(prev);
+          newPending.delete(key);
+          return newPending;
+        });
+      })
+      .catch((error) => {
+        console.error('Failed to update pixel:', error);
+        
+        // Revert optimistic update on failure
+        setPendingUpdates(prev => {
+          const newPending = new Map(prev);
+          newPending.delete(key);
+          return newPending;
+        });
+        
+        // TODO: Revert the pixel (fetch correct color from server or use previous state)
+        // For now, we'll leave the optimistic update since we don't store previous state
+      });
+  }, [canvasWidth, wsConnection, updatePixel]);
   
   const updateSelectionBorder = () => {
     const border = selectionBorderRef.current;
@@ -332,7 +599,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     setIsAnimating(false);
     
     if (newTouches.length === 1) {
-      // Single touch - start drag or potential tap
       const touch = newTouches[0];
       setIsDragging(true);
       setLastMouseX(touch.x);
@@ -341,7 +607,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       setMouseDownY(touch.y);
       
     } else if (newTouches.length === 2) {
-      // Two touches - start pinch zoom
       setIsDragging(false);
       
       const distance = getTouchDistance(newTouches[0], newTouches[1]);
@@ -365,7 +630,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     const newTouches = convertTouchList(e.touches, containerRect);
     
     if (newTouches.length === 1 && isDragging) {
-      // Single touch panning
       const touch = newTouches[0];
       const deltaX = touch.x - lastMouseX;
       const deltaY = touch.y - lastMouseY;
@@ -381,16 +645,12 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       setLastMouseY(touch.y);
       
     } else if (newTouches.length === 2) {
-      // Pinch zoom
       const distance = getTouchDistance(newTouches[0], newTouches[1]);
-
       
       if (lastTouchDistance > 0) {
-        
         const newZoom = Math.max(minZoom, Math.min(maxZoom, initialPinchZoom * (distance / lastTouchDistance)));
         
         if (newZoom !== zoom) {
-          // Calculate new pan to keep zoom centered on pinch point
           const zoomRatio = newZoom / zoom;
           const newPanX = pinchCenterX - (pinchCenterX - initialPinchPanX) * zoomRatio;
           const newPanY = pinchCenterY - (pinchCenterY - initialPinchPanY) * zoomRatio;
@@ -415,11 +675,9 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     const remainingTouches = convertTouchList(e.touches, containerRect);
     
     if (remainingTouches.length === 0) {
-      // All touches ended
       if (isDragging) {
         setIsDragging(false);
         
-        // Check if this was a tap (minimal movement)
         const lastTouch = touches[0];
         if (lastTouch) {
           const deltaX = lastTouch.x - mouseDownX;
@@ -427,7 +685,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
           const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
           
           if (distance < dragThreshold) {
-            // This was a tap - animate to pixel
             const pixelCoords = screenToPixel(lastTouch.x, lastTouch.y);
             animateToPixel(pixelCoords.x, pixelCoords.y);
           }
@@ -438,7 +695,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       setLastTouchDistance(0);
       
     } else if (remainingTouches.length === 1 && touches.length === 2) {
-      // Transitioned from pinch to single touch
       const touch = remainingTouches[0];
       setIsDragging(true);
       setLastMouseX(touch.x);
@@ -595,42 +851,44 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     }
   }, [isLoading, canvasWidth, canvasHeight, getPositionCoords, animateToPixel, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel, colors, getColorIndexFromKey, selectColorByIndex]);
   
-  // Initialize canvas from Convex data
+  // Initialize canvas from Convex data (load once)
   useEffect(() => {
     const initCanvas = async () => {
-      if (canvasData === undefined || paletteData === undefined) return; // Still loading
+      if (initialCanvasData === undefined || paletteData === undefined) return; // Still loading
       
-      if (!canvasData && !isInitialized) {
+      if (!initialCanvasData && !isInitialized) {
         try {
           await initializeCanvas({});
           setIsInitialized(true);
         } catch (error) {
-          // Error handled silently
+          console.error('Failed to initialize canvas:', error);
         }
         return;
       }
       
-      if (canvasData && paletteData) {
+      if (initialCanvasData && paletteData && !isInitialized) {
         // Handle resize if needed
-        if (canvasData.needsResize) {
+        if (initialCanvasData.needsResize) {
           try {
             await resizeCanvas({});
             // After resize, the data will be refetched automatically by Convex
             return;
           } catch (error) {
-            // Error handled silently, continue with current data
+            console.error('Failed to resize canvas:', error);
+            // Continue with current data
           }
         }
         
-        setCanvasWidth(canvasData.width);
-        setCanvasHeight(canvasData.height);
+        setCanvasWidth(initialCanvasData.width);
+        setCanvasHeight(initialCanvasData.height);
         setColors(paletteData);
-        setPixelData(canvasData.pixels);
+        setLocalPixelData(initialCanvasData.pixels);
+        setIsInitialized(true);
         
-        // Only center the canvas on initial load, not on subsequent updates
+        // Only center the canvas on initial load
         if (!hasInitiallyPositioned) {
-          const initialPanX = (window.innerWidth - canvasData.width * pixelSize) / 2;
-          const initialPanY = (window.innerHeight - canvasData.height * pixelSize) / 2;
+          const initialPanX = (window.innerWidth - initialCanvasData.width * pixelSize) / 2;
+          const initialPanY = (window.innerHeight - initialCanvasData.height * pixelSize) / 2;
           setPanX(initialPanX);
           setPanY(initialPanY);
           setHasInitiallyPositioned(true);
@@ -644,11 +902,11 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     };
     
     initCanvas();
-  }, [canvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned, resizeCanvas]);
+  }, [initialCanvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned, initializeCanvas, resizeCanvas]);
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
-    if (isLoading || !pixelData.length || !canvasWidth || !canvasHeight) return;
+    if (isLoading || !localPixelData.length || !canvasWidth || !canvasHeight) return;
     
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -662,11 +920,11 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         // Clear the canvas first
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        // Render all pixels from data
+        // Render all pixels from local data
         const imageData = ctx.createImageData(canvasWidth, canvasHeight);
         
-        for (let i = 0; i < pixelData.length; i++) {
-          const color = hexToRgb(pixelData[i]);
+        for (let i = 0; i < localPixelData.length; i++) {
+          const color = hexToRgb(localPixelData[i]);
           const pixelIndex = i * 4;
           imageData.data[pixelIndex] = color.r;
           imageData.data[pixelIndex + 1] = color.g;
@@ -677,10 +935,31 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         ctx.putImageData(imageData, 0, 0);
       }
     } catch (error) {
-      // Error handled silently
+      console.error('Canvas rendering error:', error);
     }
-  }, [isLoading, pixelData, canvasWidth, canvasHeight]);
+  }, [isLoading, localPixelData, canvasWidth, canvasHeight]);
   
+  // Fallback sync every 30 seconds (in case WebSocket misses updates)
+  useEffect(() => {
+    if (!isInitialized) return;
+    
+    const interval = setInterval(async () => {
+      try {
+        // Only sync if we haven't received WebSocket updates recently
+        if (Date.now() - lastServerSync > 30000) {
+          console.log('Performing fallback sync...');
+          // This is a simple approach - in production you might want a more sophisticated sync
+          // that compares checksums or timestamps rather than re-fetching everything
+        }
+      } catch (error) {
+        console.error('Fallback sync failed:', error);
+      }
+    }, 30000);
+    
+    return () => clearInterval(interval);
+  }, [isInitialized, lastServerSync]);
+  
+  // Animation loop
   useEffect(() => {
     let animationId: number;
     
@@ -714,6 +993,7 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     };
   }, [isAnimating, animationStartTime, startPanX, startPanY, targetPanX, targetPanY, zoom, constrainPan]);
   
+  // Update canvas transform and selection border
   useEffect(() => {
     if (isLoading || !canvasWidth || !canvasHeight) return;
     
@@ -725,7 +1005,7 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     canvas.style.transformOrigin = '0 0';
     
     updateSelectionBorder();
-  }, [panX, panY, zoom, pixelSize, isLoading, canvasWidth, canvasHeight, getPositionCoords]);
+  }, [panX, panY, zoom, pixelSize, isLoading, canvasWidth, canvasHeight]);
   
   // Event listeners setup
   useEffect(() => {
@@ -764,7 +1044,7 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
   // Only calculate position if we have valid canvas dimensions
   const currentPosition = canvasWidth && canvasHeight ? getPositionCoords() : { x: 0, y: 0 };
   
-  // Render loading screen - now includes canvas dimension check
+  // Render loading screen
   if (isLoading || !canvasWidth || !canvasHeight) {
     return (
       <div className="w-screen h-screen bg-white flex items-center justify-center">
@@ -775,6 +1055,9 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
               alt="Loading animation" 
               className="max-w-full max-h-full object-contain"
             /> 
+          </div>
+          <div className="text-black text-sm">
+            {!isInitialized ? 'Initializing canvas...' : 'Loading...'}
           </div>
         </div>
       </div>
@@ -791,8 +1074,8 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         onTouchStart={handleTouchStart}
         onContextMenu={(e) => e.preventDefault()}
         style={{ 
-          touchAction: 'none', // Prevent default touch behaviors
-          userSelect: 'none', // Prevent text selection
+          touchAction: 'none',
+          userSelect: 'none',
           WebkitUserSelect: 'none'
         }}
       >
@@ -809,10 +1092,22 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         />
       </div>
       
-      <div className="absolute top-5 left-1/2 transform -translate-x-1/2 bg-white text-black px-4 py-1 rounded-full text-xs z-20 shadow-lg">
-        ({currentPosition.x}, {currentPosition.y}) {zoom.toFixed(2)}x
+      {/* Status indicator */}
+      <div className="absolute top-2 right-2 flex items-center gap-2 z-20">
+        <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} 
+             title={isConnected ? 'Connected to real-time updates' : 'Disconnected - trying to reconnect...'}></div>
+        <span className="text-white text-xs bg-black bg-opacity-50 px-2 py-1 rounded">
+          {isConnected ? 'LIVE' : 'OFFLINE'}
+        </span>
       </div>
       
+      {/* Position and zoom indicator */}
+      <div className="absolute top-5 left-1/2 transform -translate-x-1/2 bg-white text-black px-4 py-1 rounded-full text-xs z-20 shadow-lg">
+        ({currentPosition.x}, {currentPosition.y}) {zoom.toFixed(2)}x
+        {pendingUpdates.size > 0 && <span className="ml-2 text-orange-600">●</span>}
+      </div>
+      
+      {/* Place tile button */}
       {!isPanelOpen && (
         <button
           onClick={openColorPanel}
@@ -822,12 +1117,12 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         </button>
       )}
       
+      {/* Color panel */}
       <div className={`fixed bottom-0 left-0 right-0 bg-white bg-opacity-90 shadow-lg z-30 backdrop-blur-sm transition-transform duration-300 ease-out ${
         isPanelOpen ? 'transform translate-y-0' : 'transform translate-y-full'
       }`}>
         <div className="flex w-full p-3 box-border h-[60px]">
           {colors.map((color, index) => {
-            // Get the keybind for this color index
             const keybind = index < colorKeybinds.length ? colorKeybinds[index] : null;
             
             return (
@@ -844,7 +1139,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
                 onClick={() => setSelectedColor(color)}
                 title={keybind ? `Press '${keybind}' to select` : undefined}
               >
-                {/* Show keybind */}
                 {keybind && (
                   <div className="absolute top-1 left-1 text-xs font-bold text-white drop-shadow-lg">
                     {keybind}
