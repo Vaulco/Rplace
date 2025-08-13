@@ -878,55 +878,19 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         ({currentPosition.x}, {currentPosition.y}) {zoom.toFixed(2)}x
       </div>
       
-      {/* Mobile zoom controls */}
-      {isMobile && (
-        <div className="absolute top-5 right-5 flex flex-col gap-2 z-20">
-          <button
-            onClick={zoomIn}
-            className="w-12 h-12 bg-white text-black rounded-full text-xl font-bold shadow-lg hover:bg-gray-100 transition-colors flex items-center justify-center"
-            style={{ touchAction: 'manipulation' }}
-          >
-            +
-          </button>
-          <button
-            onClick={zoomOut}
-            className="w-12 h-12 bg-white text-black rounded-full text-xl font-bold shadow-lg hover:bg-gray-100 transition-colors flex items-center justify-center"
-            style={{ touchAction: 'manipulation' }}
-          >
-            −
-          </button>
-        </div>
-      )}
-      
       {!isPanelOpen && (
         <button
           onClick={openColorPanel}
-          className={`absolute bottom-5 left-1/2 transform -translate-x-1/2 bg-white text-black px-8 py-1 rounded-full text-xs z-20 shadow-lg hover:bg-gray-100 transition-colors ${
-            isMobile ? 'py-3 px-6 text-sm' : ''
-          }`}
-          style={{ touchAction: 'manipulation' }}
+          className="absolute bottom-5 left-1/2 transform -translate-x-1/2 bg-white text-black px-8 py-1 rounded-full text-xs z-20 shadow-lg hover:bg-gray-100 transition-colors"
         >
-          {isMobile ? 'Tap to place tile' : 'Place a tile'}
+          Place a tile
         </button>
-      )}
-      
-      {/* Mobile instruction overlay (shows briefly on first load) */}
-      {isMobile && !hasInitiallyPositioned && (
-        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
-          <div className="bg-white text-black p-6 rounded-lg mx-4 text-center">
-            <h3 className="font-bold mb-2">Touch Controls</h3>
-            <p className="text-sm mb-1">• Drag to pan around</p>
-            <p className="text-sm mb-1">• Pinch to zoom in/out</p>
-            <p className="text-sm mb-1">• Tap to select pixel</p>
-            <p className="text-sm">• Long press to open color palette</p>
-          </div>
-        </div>
       )}
       
       <div className={`fixed bottom-0 left-0 right-0 bg-white bg-opacity-90 shadow-lg z-30 backdrop-blur-sm transition-transform duration-300 ease-out ${
         isPanelOpen ? 'transform translate-y-0' : 'transform translate-y-full'
       }`}>
-        <div className={`flex w-full p-3 box-border ${isMobile ? 'h-[80px]' : 'h-[60px]'}`}>
+        <div className="flex w-full p-3 box-border h-[60px]">
           {colors.map((color, index) => {
             // Get the keybind for this color index
             const keybind = index < colorKeybinds.length ? colorKeybinds[index] : null;
@@ -936,17 +900,17 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
                 key={index}
                 className={`h-full cursor-pointer transition-all border-2 relative ${
                   selectedColor === color ? 'border-gray-800' : 'border-white'
-                } ${isMobile ? 'min-w-[40px]' : ''}`}
+                }`}
                 style={{
                   backgroundColor: color,
                   flex: '1 1 0%',
                   touchAction: 'manipulation'
                 }}
                 onClick={() => setSelectedColor(color)}
-                title={!isMobile && keybind ? `Press '${keybind}' to select` : undefined}
+                title={keybind ? `Press '${keybind}' to select` : undefined}
               >
-                {/* Show keybind on desktop */}
-                {!isMobile && keybind && (
+                {/* Show keybind */}
+                {keybind && (
                   <div className="absolute top-1 left-1 text-xs font-bold text-white drop-shadow-lg">
                     {keybind}
                   </div>
@@ -955,12 +919,10 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
             );
           })}
         </div>
-        <div className={`flex justify-center gap-5 ${isMobile ? 'mb-6' : 'mb-3'}`}>
+        <div className="flex justify-center gap-5 mb-3">
           <button
             onClick={closeColorPanel}
-            className={`text-black cursor-pointer flex items-center justify-center hover:bg-gray-200 rounded transition-colors ${
-              isMobile ? 'py-3 px-8 text-base' : 'py-1 px-5 text-xs'
-            }`}
+            className="text-black cursor-pointer flex items-center justify-center hover:bg-gray-200 rounded transition-colors py-1 px-5 text-xs"
             style={{ touchAction: 'manipulation' }}
           >
             Cancel
@@ -968,12 +930,10 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
           <button
             onClick={placePixel}
             disabled={!selectedColor}
-            className={`rounded flex items-center justify-center transition-colors ${
+            className={`rounded flex items-center justify-center transition-colors py-1 px-5 text-xs ${
               selectedColor 
                 ? 'cursor-pointer text-orange-600 hover:bg-orange-50' 
                 : 'cursor-not-allowed text-gray-400'
-            } ${
-              isMobile ? 'py-3 px-8 text-base' : 'py-1 px-5 text-xs'
             }`}
             style={{ touchAction: 'manipulation' }}
           >
