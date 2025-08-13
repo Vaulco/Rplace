@@ -591,13 +591,13 @@ const RPlaceCanvas: React.FC = () => {
   
   // Render main interface
   return (
-    <div className="w-screen h-full text-white font-mono overflow-hidden">
-      <div 
-        ref={containerRef}
-        className="relative w-full h-full bg-[#333] cursor-default"
-        onMouseDown={handleMouseDown}
-        onContextMenu={(e) => e.preventDefault()}
-      >
+    <div className="fixed inset-0 text-white font-mono overflow-hidden">
+    <div 
+      ref={containerRef}
+      className="relative w-full h-full bg-[#333] cursor-default"
+      onMouseDown={handleMouseDown}
+      onContextMenu={(e) => e.preventDefault()}
+    >
         <canvas 
           ref={canvasRef}
           className="absolute pixelated"
