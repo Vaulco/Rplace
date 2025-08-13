@@ -37,111 +37,6 @@ const isValidColor = (color: string): boolean => {
   return palette.includes(color);
 };
 
-// Helper functions for pixel data compression
-const compressPixelData = (pixels: string[]): string => {
-  // Simple run-length encoding for repeated colors
-  const compressed: string[] = [];
-  let currentColor = pixels[0];
-  let count = 1;
-  
-  for (let i = 1; i < pixels.length; i++) {
-    if (pixels[i] === currentColor && count < 999) {
-      count++;
-    } else {
-      if (count === 1) {
-        compressed.push(currentColor);
-      } else {
-        compressed.push(`${count}:${currentColor}`);
-      }
-      currentColor = pixels[i];
-      count = 1;
-    }
-  }
-  
-  // Don't forget the last group
-  if (count === 1) {
-    compressed.push(currentColor);
-  } else {
-    compressed.push(`${count}:${currentColor}`);
-  }
-  
-  return compressed.join('|');
-};
-
-const decompressPixelData = (compressed: string, expectedLength: number): string[] => {
-  if (!compressed) {
-    return new Array(expectedLength).fill('#FFFFFF');
-  }
-  
-  const pixels: string[] = [];
-  const parts = compressed.split('|');
-  
-  for (const part of parts) {
-    if (part.includes(':')) {
-      const [countStr, color] = part.split(':');
-      const count = parseInt(countStr, 10);
-      for (let i = 0; i < count; i++) {
-        pixels.push(color);
-      }
-    } else {
-      pixels.push(part);
-    }
-  }
-  
-  // Ensure we have the exact expected length
-  while (pixels.length < expectedLength) {
-    pixels.push('#FFFFFF');
-  }
-  
-  return pixels.slice(0, expectedLength);
-};
-
-// Helper function to resize pixel data from top-left
-const resizePixelData = (
-  oldPixels: string[], 
-  oldWidth: number, 
-  oldHeight: number, 
-  newWidth: number, 
-  newHeight: number
-): string[] => {
-  const newPixels = new Array(newWidth * newHeight).fill('#FFFFFF');
-  
-  // Copy existing pixels from top-left
-  const copyWidth = Math.min(oldWidth, newWidth);
-  const copyHeight = Math.min(oldHeight, newHeight);
-  
-  for (let y = 0; y < copyHeight; y++) {
-    for (let x = 0; x < copyWidth; x++) {
-      const oldIndex = y * oldWidth + x;
-      const newIndex = y * newWidth + x;
-      newPixels[newIndex] = oldPixels[oldIndex];
-    }
-  }
-  
-  return newPixels;
-};
-
-// Helper function to extract size from compressed pixel data
-// We'll store size info in the compressed string format: "width,height|compressed_data"
-const extractSizeFromCompressed = (compressedWithSize: string): { width: number; height: number; compressed: string } => {
-  const parts = compressedWithSize.split('|');
-  if (parts.length < 2) {
-    // Fallback for old format - assume square based on pixel count
-    const pixels = decompressPixelData(compressedWithSize, 0);
-    const size = Math.sqrt(pixels.length);
-    return { width: size, height: size, compressed: compressedWithSize };
-  }
-  
-  const [width, height] = parts[0].split(',').map(s => parseInt(s, 10));
-  const compressed = parts.slice(1).join('|');
-  return { width, height, compressed };
-};
-
-// Helper function to add size info to compressed data
-const addSizeToCompressed = (compressed: string, width: number, height: number): string => {
-  return `${width},${height}|${compressed}`;
-};
-
 // Get the palette
 export const getPaletteColors = query({
   args: {},
@@ -150,80 +45,94 @@ export const getPaletteColors = query({
   },
 });
 
-// Get the canvas data (READ-ONLY)
+// Get the canvas data - returns canvas info and pixel map (not full array)
 export const getCanvas = query({
   args: {},
   handler: async (ctx) => {
     const { width, height } = getSize();
-    const canvas = await ctx.db
-      .query("canvas")
+    
+    // Check if canvas is initialized
+    const config = await ctx.db
+      .query("canvas_config")
       .first();
     
-    if (canvas) {
-      // Extract size and compressed data
-      const { width: storedWidth, height: storedHeight, compressed } = extractSizeFromCompressed(canvas.pixels);
-      
-      // Check if resize is needed - but don't modify in a query!
-      if (storedWidth !== width || storedHeight !== height) {
-        // Return indication that resize is needed
-        const oldPixels = decompressPixelData(compressed, storedWidth * storedHeight);
-        const newPixels = resizePixelData(oldPixels, storedWidth, storedHeight, width, height);
-        
-        return {
-          width,
-          height,
-          pixels: newPixels,
-          palette: getPalette(),
-          needsResize: true, // Indicate that a resize mutation should be called
-        };
-      }
-      
-      // No resize needed, decompress and return
-      const decompressedPixels = decompressPixelData(compressed, width * height);
-      return {
-        width,
-        height,
-        pixels: decompressedPixels,
-        palette: getPalette(),
-        needsResize: false,
-      };
+    if (!config) {
+      return null; // Canvas not initialized
     }
     
-    return null;
+    // Check if resize is needed
+    const needsResize = config.width !== width || config.height !== height;
+    
+    // Get all pixels and return as a map instead of array
+    const pixelDocs = await ctx.db
+      .query("pixels")
+      .collect();
+    
+    // Create a pixel map (coordinate string -> color)
+    const pixelMap: Record<string, string> = {};
+    
+    for (const pixel of pixelDocs) {
+      // Only include pixels that are within the current canvas bounds
+      if (pixel.x >= 0 && pixel.x < width && pixel.y >= 0 && pixel.y < height) {
+        pixelMap[`${pixel.x},${pixel.y}`] = pixel.color;
+      }
+    }
+    
+    return {
+      width,
+      height,
+      pixelMap, // Instead of pixels array
+      palette: getPalette(),
+      needsResize,
+    };
   },
 });
 
-// NEW: Separate mutation to handle resizing
+// Handle canvas resizing - removes pixels outside new bounds
 export const resizeCanvas = mutation({
   args: {},
   handler: async (ctx) => {
     const { width, height } = getSize();
-    const canvas = await ctx.db
-      .query("canvas")
+    
+    let config = await ctx.db
+      .query("canvas_config")
       .first();
     
-    if (!canvas) {
-      throw new Error("Canvas not found");
+    if (!config) {
+      // Create config if it doesn't exist
+      await ctx.db.insert("canvas_config", {
+        width,
+        height,
+        initialized: true,
+      });
+      return { success: true, resized: true };
     }
     
-    // Extract size and compressed data
-    const { width: storedWidth, height: storedHeight, compressed } = extractSizeFromCompressed(canvas.pixels);
-    
     // Only resize if needed
-    if (storedWidth !== width || storedHeight !== height) {
-      // Decompress old pixels
-      const oldPixels = decompressPixelData(compressed, storedWidth * storedHeight);
-      
-      // Resize from top-left
-      const newPixels = resizePixelData(oldPixels, storedWidth, storedHeight, width, height);
-      
-      // Compress and update
-      const newCompressed = compressPixelData(newPixels);
-      const newCompressedWithSize = addSizeToCompressed(newCompressed, width, height);
-      
-      await ctx.db.patch(canvas._id, {
-        pixels: newCompressedWithSize,
+    if (config.width !== width || config.height !== height) {
+      // Update config
+      await ctx.db.patch(config._id, {
+        width,
+        height,
       });
+      
+      // Remove pixels that are now outside the canvas bounds
+      const pixelsToRemove = await ctx.db
+        .query("pixels")
+        .filter((q) => 
+          q.or(
+            q.gte(q.field("x"), width),
+            q.gte(q.field("y"), height),
+            q.lt(q.field("x"), 0),
+            q.lt(q.field("y"), 0)
+          )
+        )
+        .collect();
+      
+      // Delete out-of-bounds pixels
+      for (const pixel of pixelsToRemove) {
+        await ctx.db.delete(pixel._id);
+      }
       
       return { success: true, resized: true };
     }
@@ -237,28 +146,27 @@ export const initializeCanvas = mutation({
   args: {},
   handler: async (ctx) => {
     const { width, height } = getSize();
-    const existingCanvas = await ctx.db
-      .query("canvas")
+    
+    const existingConfig = await ctx.db
+      .query("canvas_config")
       .first();
 
-    if (existingCanvas) {
-      return existingCanvas._id;
+    if (existingConfig) {
+      return existingConfig._id;
     }
 
-    // Create initial pixel data (all white) and compress it
-    const initialPixels = new Array(width * height).fill('#FFFFFF');
-    const compressedPixels = compressPixelData(initialPixels);
-    const compressedWithSize = addSizeToCompressed(compressedPixels, width, height);
-
-    const canvasId = await ctx.db.insert("canvas", {
-      pixels: compressedWithSize,
+    // Create canvas config
+    const configId = await ctx.db.insert("canvas_config", {
+      width,
+      height,
+      initialized: true,
     });
 
-    return canvasId;
+    return configId;
   },
 });
 
-// Update a single pixel
+// Update a single pixel - much simpler now!
 export const updatePixel = mutation({
   args: {
     x: v.number(),
@@ -272,31 +180,127 @@ export const updatePixel = mutation({
     }
 
     const { width, height } = getSize();
-    const canvas = await ctx.db
-      .query("canvas")
-      .first();
-
-    if (!canvas) {
-      throw new Error("Canvas not found");
+    
+    // Check bounds
+    if (args.x < 0 || args.x >= width || args.y < 0 || args.y >= height) {
+      throw new Error(`Coordinates (${args.x}, ${args.y}) are out of bounds`);
     }
 
-    // Extract size and compressed data
-    const { compressed } = extractSizeFromCompressed(canvas.pixels);
-    
-    // Decompress, update, and recompress
-    const pixels = decompressPixelData(compressed, width * height);
-    const index = args.y * width + args.x;
-    
-    if (index >= 0 && index < pixels.length) {
-      pixels[index] = args.color;
-      const compressedPixels = compressPixelData(pixels);
-      const compressedWithSize = addSizeToCompressed(compressedPixels, width, height);
+    // Check if pixel already exists at this coordinate
+    const existingPixel = await ctx.db
+      .query("pixels")
+      .withIndex("by_coordinates", (q) => 
+        q.eq("x", args.x).eq("y", args.y)
+      )
+      .first();
 
-      await ctx.db.patch(canvas._id, {
-        pixels: compressedWithSize,
+    if (existingPixel) {
+      // Update existing pixel
+      await ctx.db.patch(existingPixel._id, {
+        color: args.color,
+      });
+    } else {
+      // Create new pixel
+      await ctx.db.insert("pixels", {
+        x: args.x,
+        y: args.y,
+        color: args.color,
       });
     }
 
     return { success: true };
+  },
+});
+
+// Get a specific pixel (useful for real-time updates)
+export const getPixel = query({
+  args: {
+    x: v.number(),
+    y: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const pixel = await ctx.db
+      .query("pixels")
+      .withIndex("by_coordinates", (q) => 
+        q.eq("x", args.x).eq("y", args.y)
+      )
+      .first();
+
+    return pixel ? pixel.color : '#FFFFFF'; // Default to white if no pixel exists
+  },
+});
+
+// Get pixels in a specific region (useful for loading visible area)
+export const getPixelsInRegion = query({
+  args: {
+    startX: v.number(),
+    startY: v.number(),
+    endX: v.number(),
+    endY: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const pixels = await ctx.db
+      .query("pixels")
+      .filter((q) =>
+        q.and(
+          q.gte(q.field("x"), args.startX),
+          q.lte(q.field("x"), args.endX),
+          q.gte(q.field("y"), args.startY),
+          q.lte(q.field("y"), args.endY)
+        )
+      )
+      .collect();
+
+    return pixels;
+  },
+});
+
+// Bulk update pixels (useful for importing or batch operations)
+export const updatePixels = mutation({
+  args: {
+    pixels: v.array(v.object({
+      x: v.number(),
+      y: v.number(),
+      color: v.string(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const { width, height } = getSize();
+    
+    for (const pixel of args.pixels) {
+      // Validate color
+      if (!isValidColor(pixel.color)) {
+        throw new Error(`Invalid color: ${pixel.color}. Color must be one of the palette colors.`);
+      }
+      
+      // Check bounds
+      if (pixel.x < 0 || pixel.x >= width || pixel.y < 0 || pixel.y >= height) {
+        continue; // Skip out-of-bounds pixels
+      }
+      
+      // Check if pixel already exists
+      const existingPixel = await ctx.db
+        .query("pixels")
+        .withIndex("by_coordinates", (q) => 
+          q.eq("x", pixel.x).eq("y", pixel.y)
+        )
+        .first();
+
+      if (existingPixel) {
+        // Update existing pixel
+        await ctx.db.patch(existingPixel._id, {
+          color: pixel.color,
+        });
+      } else {
+        // Create new pixel
+        await ctx.db.insert("pixels", {
+          x: pixel.x,
+          y: pixel.y,
+          color: pixel.color,
+        });
+      }
+    }
+
+    return { success: true, updated: args.pixels.length };
   },
 });

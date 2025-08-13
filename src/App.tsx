@@ -26,7 +26,7 @@ const RPlaceCanvas: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasInitiallyPositioned, setHasInitiallyPositioned] = useState(false);
   
-  // Canvas configuration - Initialize with 0 instead of 10
+  // Canvas configuration
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [canvasHeight, setCanvasHeight] = useState(0);
   const [colors, setColors] = useState<string[]>([]);
@@ -60,7 +60,21 @@ const RPlaceCanvas: React.FC = () => {
   // UI state
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-  const [pixelData, setPixelData] = useState<string[]>([]);
+  const [pixelMap, setPixelMap] = useState<Record<string, string>>({});
+  
+  // Helper function to get pixel color from map
+  const getPixelColor = (x: number, y: number): string => {
+    return pixelMap[`${x},${y}`] || '#FFFFFF';
+  };
+  
+  // Helper function to set pixel color in map
+  const setPixelInMap = (x: number, y: number, color: string) => {
+    const key = `${x},${y}`;
+    setPixelMap(prev => ({
+      ...prev,
+      [key]: color
+    }));
+  };
   
   // Convex queries and mutations
   const canvasData = useQuery(api.functions.getCanvas, {});
@@ -82,7 +96,6 @@ const RPlaceCanvas: React.FC = () => {
   
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
-    // Trim whitespace and ensure we have a clean hex string
     const cleanHex = hex.trim();
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(cleanHex);
     return result ? {
@@ -151,19 +164,21 @@ const RPlaceCanvas: React.FC = () => {
     };
   }, [pixelSize, canvasWidth, canvasHeight]);
   
-  // Canvas operations
-  const updateSinglePixel = (x: number, y: number, color: string) => {
+  // Canvas operations - now works with pixel map
+  const updateSinglePixel = async (x: number, y: number, color: string) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    const index = y * canvasWidth + x;
-    const newData = [...pixelData];
-    newData[index] = color;
-    setPixelData(newData);
+    // Store original color for potential rollback
+    const originalColor = getPixelColor(x, y);
     
+    // Optimistic update - update local state immediately
+    setPixelInMap(x, y, color);
+    
+    // Update canvas immediately
     const rgb = hexToRgb(color);
     const imageData = ctx.createImageData(1, 1);
     imageData.data[0] = rgb.r;
@@ -173,8 +188,24 @@ const RPlaceCanvas: React.FC = () => {
     
     ctx.putImageData(imageData, x, y);
     
-    // Update Convex (fire and forget - optimistic update already applied)
-    updatePixel({ x, y, color }).catch(() => {});
+    // Update database (fire and forget - optimistic update already applied)
+    try {
+      await updatePixel({ x, y, color });
+    } catch (error) {
+      // Revert optimistic update on error
+      setPixelInMap(x, y, originalColor);
+      
+      // Revert canvas update
+      const originalRgb = hexToRgb(originalColor);
+      const revertImageData = ctx.createImageData(1, 1);
+      revertImageData.data[0] = originalRgb.r;
+      revertImageData.data[1] = originalRgb.g;
+      revertImageData.data[2] = originalRgb.b;
+      revertImageData.data[3] = 255;
+      ctx.putImageData(revertImageData, x, y);
+      
+      console.error('Failed to update pixel:', error);
+    }
   };
   
   const updateSelectionBorder = () => {
@@ -270,7 +301,7 @@ const RPlaceCanvas: React.FC = () => {
     closeColorPanel();
   };
   
-  // Event handlers
+  // Event handlers (unchanged)
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isLoading || !canvasWidth || !canvasHeight) return;
     
@@ -424,7 +455,7 @@ const RPlaceCanvas: React.FC = () => {
           await initializeCanvas({});
           setIsInitialized(true);
         } catch (error) {
-          // Error handled silently
+          console.error('Failed to initialize canvas:', error);
         }
         return;
       }
@@ -437,14 +468,14 @@ const RPlaceCanvas: React.FC = () => {
             // After resize, the data will be refetched automatically by Convex
             return;
           } catch (error) {
-            // Error handled silently, continue with current data
+            console.error('Failed to resize canvas:', error);
           }
         }
         
         setCanvasWidth(canvasData.width);
         setCanvasHeight(canvasData.height);
         setColors(paletteData);
-        setPixelData(canvasData.pixels);
+        setPixelMap(canvasData.pixelMap);
         
         // Only center the canvas on initial load, not on subsequent updates
         if (!hasInitiallyPositioned) {
@@ -463,11 +494,11 @@ const RPlaceCanvas: React.FC = () => {
     };
     
     initCanvas();
-  }, [canvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned, resizeCanvas]);
+  }, [canvasData, paletteData, isInitialized, pixelSize, hasInitiallyPositioned, initializeCanvas, resizeCanvas]);
 
   // Initialize canvas rendering when data is loaded
   useEffect(() => {
-    if (isLoading || !pixelData.length || !canvasWidth || !canvasHeight) return;
+    if (isLoading || !Object.keys(pixelMap).length && !canvasWidth || !canvasHeight) return;
     
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -478,28 +509,42 @@ const RPlaceCanvas: React.FC = () => {
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Clear the canvas first
-        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        // Clear the canvas first (fill with white)
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         
-        // Render all pixels from data
+        // Render all pixels from pixel map
         const imageData = ctx.createImageData(canvasWidth, canvasHeight);
         
-        for (let i = 0; i < pixelData.length; i++) {
-          const color = hexToRgb(pixelData[i]);
-          const pixelIndex = i * 4;
-          imageData.data[pixelIndex] = color.r;
-          imageData.data[pixelIndex + 1] = color.g;
-          imageData.data[pixelIndex + 2] = color.b;
-          imageData.data[pixelIndex + 3] = 255;
+        // Fill imageData with white first
+        for (let i = 0; i < imageData.data.length; i += 4) {
+          imageData.data[i] = 255;     // R
+          imageData.data[i + 1] = 255; // G
+          imageData.data[i + 2] = 255; // B
+          imageData.data[i + 3] = 255; // A
         }
+        
+        // Apply colored pixels from the map
+        Object.entries(pixelMap).forEach(([key, color]) => {
+          const [x, y] = key.split(',').map(Number);
+          if (x >= 0 && x < canvasWidth && y >= 0 && y < canvasHeight) {
+            const rgb = hexToRgb(color);
+            const pixelIndex = (y * canvasWidth + x) * 4;
+            imageData.data[pixelIndex] = rgb.r;
+            imageData.data[pixelIndex + 1] = rgb.g;
+            imageData.data[pixelIndex + 2] = rgb.b;
+            imageData.data[pixelIndex + 3] = 255;
+          }
+        });
         
         ctx.putImageData(imageData, 0, 0);
       }
     } catch (error) {
-      // Error handled silently
+      console.error('Failed to render canvas:', error);
     }
-  }, [isLoading, pixelData, canvasWidth, canvasHeight]);
+  }, [isLoading, pixelMap, canvasWidth, canvasHeight]);
   
+  // Animation loop
   useEffect(() => {
     let animationId: number;
     
@@ -533,6 +578,7 @@ const RPlaceCanvas: React.FC = () => {
     };
   }, [isAnimating, animationStartTime, startPanX, startPanY, targetPanX, targetPanY, zoom, constrainPan]);
   
+  // Update canvas transform and selection border
   useEffect(() => {
     if (isLoading || !canvasWidth || !canvasHeight) return;
     
@@ -544,8 +590,9 @@ const RPlaceCanvas: React.FC = () => {
     canvas.style.transformOrigin = '0 0';
     
     updateSelectionBorder();
-  }, [panX, panY, zoom, pixelSize, isLoading, canvasWidth, canvasHeight, getPositionCoords]);
+  }, [panX, panY, zoom, pixelSize, isLoading, canvasWidth, canvasHeight]);
   
+  // Event listeners
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -572,7 +619,7 @@ const RPlaceCanvas: React.FC = () => {
   // Only calculate position if we have valid canvas dimensions
   const currentPosition = canvasWidth && canvasHeight ? getPositionCoords() : { x: 0, y: 0 };
   
-  // Render loading screen - now includes canvas dimension check
+  // Render loading screen
   if (isLoading || !canvasWidth || !canvasHeight) {
     return (
       <div className="w-screen h-screen bg-white flex items-center justify-center">
