@@ -591,7 +591,7 @@ const RPlaceCanvas: React.FC = () => {
   
   // Render main interface
   return (
-    <div className="w-screen h-screen text-white font-mono overflow-hidden">
+    <div className="w-screen h-full text-white font-mono overflow-hidden">
       <div 
         ref={containerRef}
         className="relative w-full h-full bg-[#333] cursor-default"
@@ -601,7 +601,6 @@ const RPlaceCanvas: React.FC = () => {
         <canvas 
           ref={canvasRef}
           className="absolute pixelated"
-          style={{ imageRendering: 'pixelated' }}
         />
         
         <img
