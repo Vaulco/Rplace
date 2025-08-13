@@ -21,13 +21,6 @@ interface Touch {
   y: number;
 }
 
-interface PixelUpdate {
-  x: number;
-  y: number;
-  color: string;
-  userId?: string;
-  timestamp?: number;
-}
 
 const RPlaceCanvas: React.FC = () => {
   // Refs
