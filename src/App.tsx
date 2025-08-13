@@ -15,6 +15,13 @@ interface ColorRGB {
   b: number;
 }
 
+interface Touch {
+  id: number;
+  x: number;
+  y: number;
+}
+
+
 const RPlaceCanvas: React.FC = () => {
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -48,6 +55,18 @@ const RPlaceCanvas: React.FC = () => {
   const [mouseDownY, setMouseDownY] = useState(0);
   const [dragThreshold] = useState(3);
   
+  // Touch state
+  const [touches, setTouches] = useState<Touch[]>([]);
+  const [lastTouchDistance, setLastTouchDistance] = useState(0);
+  const [initialPinchZoom, setInitialPinchZoom] = useState(1);
+  const [initialPinchPanX, setInitialPinchPanX] = useState(0);
+  const [initialPinchPanY, setInitialPinchPanY] = useState(0);
+  const [pinchCenterX, setPinchCenterX] = useState(0);
+  const [pinchCenterY, setPinchCenterY] = useState(0);
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [isLongPress, setIsLongPress] = useState(false);
+  const [longPressThreshold] = useState(500); // 500ms for long press
+  
   // Animation state
   const [isAnimating, setIsAnimating] = useState(false);
   const [animationStartTime, setAnimationStartTime] = useState(0);
@@ -61,6 +80,7 @@ const RPlaceCanvas: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [pixelData, setPixelData] = useState<string[]>([]);
+  const [isMobile, setIsMobile] = useState(false);
   
   // Convex queries and mutations
   const canvasData = useQuery(api.functions.getCanvas, {});
@@ -74,11 +94,59 @@ const RPlaceCanvas: React.FC = () => {
   // Keybind mapping for color selection (1-9, a-z)
   const colorKeybinds = '123456789abcdefghijklmnopqrstuvwxyz';
   
+  // Detect mobile device
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => {
+      window.removeEventListener('resize', checkMobile);
+    };
+  }, []);
+  
   // Helper function to get color index from key
   const getColorIndexFromKey = (key: string): number => {
     const index = colorKeybinds.indexOf(key.toLowerCase());
     return index !== -1 && index < colors.length ? index : -1;
   };
+  
+  // Touch helper functions
+  const getTouchDistance = (touch1: Touch, touch2: Touch): number => {
+    const dx = touch1.x - touch2.x;
+    const dy = touch1.y - touch2.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  
+  const getTouchCenter = (touch1: Touch, touch2: Touch): Position => {
+    return {
+      x: (touch1.x + touch2.x) / 2,
+      y: (touch1.y + touch2.y) / 2
+    };
+  };
+  
+  type MyTouch = {
+  id: number;
+  x: number;
+  y: number;
+};
+
+const convertTouchList = (touchList: TouchList | React.TouchList, containerRect: DOMRect): MyTouch[] => {
+  const touches: MyTouch[] = [];
+  for (let i = 0; i < touchList.length; i++) {
+    const t = touchList[i] as globalThis.Touch; // Explicitly say it's the DOM Touch
+    touches.push({
+      id: t.identifier,
+      x: t.clientX - containerRect.left,
+      y: t.clientY - containerRect.top
+    });
+  }
+  return touches;
+};
+
   
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
@@ -270,9 +338,170 @@ const RPlaceCanvas: React.FC = () => {
     closeColorPanel();
   };
   
-  // Event handlers
+  // Touch event handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (isLoading || !canvasWidth || !canvasHeight || !containerRef.current) return;
+    
+    e.preventDefault();
+    
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const newTouches = convertTouchList(e.touches, containerRect);
+    setTouches(newTouches);
+    
+    setIsAnimating(false);
+    
+    if (newTouches.length === 1) {
+      // Single touch - start drag or potential tap
+      const touch = newTouches[0];
+      setIsDragging(true);
+      setLastMouseX(touch.x);
+      setLastMouseY(touch.y);
+      setMouseDownX(touch.x);
+      setMouseDownY(touch.y);
+      setIsLongPress(false);
+      
+      // Start long press timer
+      const timer = setTimeout(() => {
+        setIsLongPress(true);
+        if (!isPanelOpen) {
+          openColorPanel();
+          // Add haptic feedback if available
+          if (navigator.vibrate) {
+            navigator.vibrate(50);
+          }
+        }
+      }, longPressThreshold);
+      
+      setLongPressTimer(timer);
+      
+    } else if (newTouches.length === 2) {
+      // Two touches - start pinch zoom
+      clearLongPressTimer();
+      setIsDragging(false);
+      
+      const distance = getTouchDistance(newTouches[0], newTouches[1]);
+      const center = getTouchCenter(newTouches[0], newTouches[1]);
+      
+      setLastTouchDistance(distance);
+      setInitialPinchZoom(zoom);
+      setInitialPinchPanX(panX);
+      setInitialPinchPanY(panY);
+      setPinchCenterX(center.x);
+      setPinchCenterY(center.y);
+    }
+  };
+  
+  const clearLongPressTimer = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      setLongPressTimer(null);
+    }
+  };
+  
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+    if (isLoading || !canvasWidth || !canvasHeight || !containerRef.current) return;
+    
+    e.preventDefault();
+    
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const newTouches = convertTouchList(e.touches, containerRect);
+    
+    if (newTouches.length === 1 && isDragging) {
+      // Single touch panning
+      clearLongPressTimer(); // Cancel long press if moving
+      
+      const touch = newTouches[0];
+      const deltaX = touch.x - lastMouseX;
+      const deltaY = touch.y - lastMouseY;
+      
+      const newPanX = panX + deltaX;
+      const newPanY = panY + deltaY;
+      
+      const constrained = constrainPan(newPanX, newPanY, zoom);
+      setPanX(constrained.x);
+      setPanY(constrained.y);
+      
+      setLastMouseX(touch.x);
+      setLastMouseY(touch.y);
+      
+    } else if (newTouches.length === 2) {
+      // Pinch zoom
+      clearLongPressTimer();
+      
+      const distance = getTouchDistance(newTouches[0], newTouches[1]);
+      const center = getTouchCenter(newTouches[0], newTouches[1]);
+      
+      if (lastTouchDistance > 0) {
+        const zoomMultiplier = distance / lastTouchDistance;
+        const newZoom = Math.max(minZoom, Math.min(maxZoom, initialPinchZoom * (distance / lastTouchDistance)));
+        
+        if (newZoom !== zoom) {
+          // Calculate new pan to keep zoom centered on pinch point
+          const zoomRatio = newZoom / zoom;
+          const newPanX = pinchCenterX - (pinchCenterX - initialPinchPanX) * zoomRatio;
+          const newPanY = pinchCenterY - (pinchCenterY - initialPinchPanY) * zoomRatio;
+          
+          const constrained = constrainPan(newPanX, newPanY, newZoom);
+          setPanX(constrained.x);
+          setPanY(constrained.y);
+          setZoom(newZoom);
+        }
+      }
+    }
+    
+    setTouches(newTouches);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, lastMouseX, lastMouseY, panX, panY, zoom, lastTouchDistance, initialPinchZoom, initialPinchPanX, initialPinchPanY, pinchCenterX, pinchCenterY, minZoom, maxZoom, constrainPan]);
+  
+  const handleTouchEnd = useCallback((e: TouchEvent) => {
+    if (isLoading || !canvasWidth || !canvasHeight || !containerRef.current) return;
+    
+    e.preventDefault();
+    clearLongPressTimer();
+    
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const remainingTouches = convertTouchList(e.touches, containerRect);
+    
+    if (remainingTouches.length === 0) {
+      // All touches ended
+      if (isDragging && !isLongPress) {
+        setIsDragging(false);
+        
+        // Check if this was a tap (minimal movement)
+        const lastTouch = touches[0];
+        if (lastTouch) {
+          const deltaX = lastTouch.x - mouseDownX;
+          const deltaY = lastTouch.y - mouseDownY;
+          const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+          
+          if (distance < dragThreshold) {
+            // This was a tap - animate to pixel
+            const pixelCoords = screenToPixel(lastTouch.x, lastTouch.y);
+            animateToPixel(pixelCoords.x, pixelCoords.y);
+          }
+        }
+      }
+      
+      setIsLongPress(false);
+      setTouches([]);
+      setLastTouchDistance(0);
+      
+    } else if (remainingTouches.length === 1 && touches.length === 2) {
+      // Transitioned from pinch to single touch
+      const touch = remainingTouches[0];
+      setIsDragging(true);
+      setLastMouseX(touch.x);
+      setLastMouseY(touch.y);
+      setMouseDownX(touch.x);
+      setMouseDownY(touch.y);
+      setLastTouchDistance(0);
+    }
+    
+    setTouches(remainingTouches);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, isLongPress, touches, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
+  
+  // Mouse event handlers (for desktop)
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight) return;
+    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
     
     setIsAnimating(false);
     setIsDragging(true);
@@ -284,7 +513,7 @@ const RPlaceCanvas: React.FC = () => {
   };
   
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight || !isDragging) return;
+    if (isLoading || !canvasWidth || !canvasHeight || !isDragging || isMobile) return;
     
     const deltaX = e.clientX - lastMouseX;
     const deltaY = e.clientY - lastMouseY;
@@ -298,10 +527,10 @@ const RPlaceCanvas: React.FC = () => {
     
     setLastMouseX(e.clientX);
     setLastMouseY(e.clientY);
-  }, [isLoading, canvasWidth, canvasHeight, isDragging, lastMouseX, lastMouseY, panX, panY, zoom, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, isMobile, lastMouseX, lastMouseY, panX, panY, zoom, constrainPan]);
   
   const handleMouseUp = useCallback((e: MouseEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight) return;
+    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
     
     if (isDragging) {
       setIsDragging(false);
@@ -319,10 +548,10 @@ const RPlaceCanvas: React.FC = () => {
         animateToPixel(pixelCoords.x, pixelCoords.y);
       }
     }
-  }, [isLoading, canvasWidth, canvasHeight, isDragging, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
+  }, [isLoading, canvasWidth, canvasHeight, isMobile, isDragging, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
   
   const handleWheel = useCallback((e: WheelEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight) return;
+    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
     
     e.preventDefault();
     setIsAnimating(false);
@@ -346,10 +575,10 @@ const RPlaceCanvas: React.FC = () => {
       setPanY(constrained.y);
       setZoom(newZoom);
     }
-  }, [isLoading, canvasWidth, canvasHeight, zoom, panX, panY, zoomFactor, minZoom, maxZoom, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, isMobile, zoom, panX, panY, zoomFactor, minZoom, maxZoom, constrainPan]);
   
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight) return;
+    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
     
     // Check if this is a color selection key
     const colorIndex = getColorIndexFromKey(e.key);
@@ -412,7 +641,7 @@ const RPlaceCanvas: React.FC = () => {
         }
         break;
     }
-  }, [isLoading, canvasWidth, canvasHeight, getPositionCoords, animateToPixel, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel, colors, getColorIndexFromKey, selectColorByIndex]);
+  }, [isLoading, canvasWidth, canvasHeight, isMobile, getPositionCoords, animateToPixel, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel, colors, getColorIndexFromKey, selectColorByIndex]);
   
   // Initialize canvas from Convex data
   useEffect(() => {
@@ -546,28 +775,56 @@ const RPlaceCanvas: React.FC = () => {
     updateSelectionBorder();
   }, [panX, panY, zoom, pixelSize, isLoading, canvasWidth, canvasHeight, getPositionCoords]);
   
+  // Event listeners setup
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     
-    container.addEventListener('wheel', handleWheel, { passive: false });
+    // Touch events
+    container.addEventListener('touchmove', handleTouchMove, { passive: false });
+    container.addEventListener('touchend', handleTouchEnd, { passive: false });
+    
+    // Mouse wheel for desktop
+    if (!isMobile) {
+      container.addEventListener('wheel', handleWheel, { passive: false });
+    }
     
     return () => {
-      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('touchmove', handleTouchMove);
+      container.removeEventListener('touchend', handleTouchEnd);
+      if (!isMobile) {
+        container.removeEventListener('wheel', handleWheel);
+      }
     };
-  }, [handleWheel]);
+  }, [handleTouchMove, handleTouchEnd, handleWheel, isMobile]);
   
   useEffect(() => {
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    document.addEventListener('keydown', handleKeyDown);
+    // Mouse events for desktop only
+    if (!isMobile) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+    
+    // Keyboard events (desktop only, since mobile uses touch interface)
+    if (!isMobile) {
+      document.addEventListener('keydown', handleKeyDown);
+    }
     
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.removeEventListener('keydown', handleKeyDown);
+      if (!isMobile) {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+        document.removeEventListener('keydown', handleKeyDown);
+      }
     };
-  }, [handleMouseMove, handleMouseUp, handleKeyDown]);
+  }, [handleMouseMove, handleMouseUp, handleKeyDown, isMobile]);
+  
+  // Cleanup long press timer on unmount
+  useEffect(() => {
+    return () => {
+      clearLongPressTimer();
+    };
+  }, []);
   
   // Only calculate position if we have valid canvas dimensions
   const currentPosition = canvasWidth && canvasHeight ? getPositionCoords() : { x: 0, y: 0 };
@@ -592,12 +849,18 @@ const RPlaceCanvas: React.FC = () => {
   // Render main interface
   return (
     <div className="fixed inset-0 text-white font-mono overflow-hidden">
-    <div 
-      ref={containerRef}
-      className="relative w-full h-full bg-[#333] cursor-default"
-      onMouseDown={handleMouseDown}
-      onContextMenu={(e) => e.preventDefault()}
-    >
+      <div 
+        ref={containerRef}
+        className="relative w-full h-full bg-[#333] cursor-default"
+        onMouseDown={handleMouseDown}
+        onTouchStart={handleTouchStart}
+        onContextMenu={(e) => e.preventDefault()}
+        style={{ 
+          touchAction: 'none', // Prevent default touch behaviors
+          userSelect: 'none', // Prevent text selection
+          WebkitUserSelect: 'none'
+        }}
+      >
         <canvas 
           ref={canvasRef}
           className="absolute pixelated"
@@ -615,19 +878,55 @@ const RPlaceCanvas: React.FC = () => {
         ({currentPosition.x}, {currentPosition.y}) {zoom.toFixed(2)}x
       </div>
       
+      {/* Mobile zoom controls */}
+      {isMobile && (
+        <div className="absolute top-5 right-5 flex flex-col gap-2 z-20">
+          <button
+            onClick={zoomIn}
+            className="w-12 h-12 bg-white text-black rounded-full text-xl font-bold shadow-lg hover:bg-gray-100 transition-colors flex items-center justify-center"
+            style={{ touchAction: 'manipulation' }}
+          >
+            +
+          </button>
+          <button
+            onClick={zoomOut}
+            className="w-12 h-12 bg-white text-black rounded-full text-xl font-bold shadow-lg hover:bg-gray-100 transition-colors flex items-center justify-center"
+            style={{ touchAction: 'manipulation' }}
+          >
+            −
+          </button>
+        </div>
+      )}
+      
       {!isPanelOpen && (
         <button
           onClick={openColorPanel}
-          className="absolute bottom-5 left-1/2 transform -translate-x-1/2 bg-white text-black px-8 py-1 rounded-full text-xs z-20 shadow-lg hover:bg-gray-100 transition-colors"
+          className={`absolute bottom-5 left-1/2 transform -translate-x-1/2 bg-white text-black px-8 py-1 rounded-full text-xs z-20 shadow-lg hover:bg-gray-100 transition-colors ${
+            isMobile ? 'py-3 px-6 text-sm' : ''
+          }`}
+          style={{ touchAction: 'manipulation' }}
         >
-          Place a tile
+          {isMobile ? 'Tap to place tile' : 'Place a tile'}
         </button>
+      )}
+      
+      {/* Mobile instruction overlay (shows briefly on first load) */}
+      {isMobile && !hasInitiallyPositioned && (
+        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+          <div className="bg-white text-black p-6 rounded-lg mx-4 text-center">
+            <h3 className="font-bold mb-2">Touch Controls</h3>
+            <p className="text-sm mb-1">• Drag to pan around</p>
+            <p className="text-sm mb-1">• Pinch to zoom in/out</p>
+            <p className="text-sm mb-1">• Tap to select pixel</p>
+            <p className="text-sm">• Long press to open color palette</p>
+          </div>
+        </div>
       )}
       
       <div className={`fixed bottom-0 left-0 right-0 bg-white bg-opacity-90 shadow-lg z-30 backdrop-blur-sm transition-transform duration-300 ease-out ${
         isPanelOpen ? 'transform translate-y-0' : 'transform translate-y-full'
       }`}>
-        <div className="flex w-full h-[60px] p-3 box-border">
+        <div className={`flex w-full p-3 box-border ${isMobile ? 'h-[80px]' : 'h-[60px]'}`}>
           {colors.map((color, index) => {
             // Get the keybind for this color index
             const keybind = index < colorKeybinds.length ? colorKeybinds[index] : null;
@@ -637,33 +936,46 @@ const RPlaceCanvas: React.FC = () => {
                 key={index}
                 className={`h-full cursor-pointer transition-all border-2 relative ${
                   selectedColor === color ? 'border-gray-800' : 'border-white'
-                }`}
+                } ${isMobile ? 'min-w-[40px]' : ''}`}
                 style={{
                   backgroundColor: color,
-                  flex: '1 1 0%'
+                  flex: '1 1 0%',
+                  touchAction: 'manipulation'
                 }}
                 onClick={() => setSelectedColor(color)}
-                title={keybind ? `Press '${keybind}' to select` : 'No keybind available'}
+                title={!isMobile && keybind ? `Press '${keybind}' to select` : undefined}
               >
+                {/* Show keybind on desktop */}
+                {!isMobile && keybind && (
+                  <div className="absolute top-1 left-1 text-xs font-bold text-white drop-shadow-lg">
+                    {keybind}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
-        <div className="flex justify-center gap-5 mb-3">
+        <div className={`flex justify-center gap-5 ${isMobile ? 'mb-6' : 'mb-3'}`}>
           <button
             onClick={closeColorPanel}
-            className="py-1 px-5 text-black cursor-pointer flex items-center justify-center text-xs hover:bg-gray-200 rounded transition-colors"
+            className={`text-black cursor-pointer flex items-center justify-center hover:bg-gray-200 rounded transition-colors ${
+              isMobile ? 'py-3 px-8 text-base' : 'py-1 px-5 text-xs'
+            }`}
+            style={{ touchAction: 'manipulation' }}
           >
             Cancel
           </button>
           <button
             onClick={placePixel}
             disabled={!selectedColor}
-            className={`py-1 px-5 rounded text-xs flex items-center justify-center transition-colors ${
+            className={`rounded flex items-center justify-center transition-colors ${
               selectedColor 
                 ? 'cursor-pointer text-orange-600 hover:bg-orange-50' 
                 : 'cursor-not-allowed text-gray-400'
+            } ${
+              isMobile ? 'py-3 px-8 text-base' : 'py-1 px-5 text-xs'
             }`}
+            style={{ touchAction: 'manipulation' }}
           >
             Place
           </button>
