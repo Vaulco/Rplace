@@ -63,9 +63,6 @@ const RPlaceCanvas: React.FC = () => {
   const [initialPinchPanY, setInitialPinchPanY] = useState(0);
   const [pinchCenterX, setPinchCenterX] = useState(0);
   const [pinchCenterY, setPinchCenterY] = useState(0);
-  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
-  const [isLongPress, setIsLongPress] = useState(false);
-  const [longPressThreshold] = useState(500); // 500ms for long press
   
   // Animation state
   const [isAnimating, setIsAnimating] = useState(false);
@@ -80,7 +77,6 @@ const RPlaceCanvas: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [pixelData, setPixelData] = useState<string[]>([]);
-  const [isMobile, setIsMobile] = useState(false);
   
   // Convex queries and mutations
   const canvasData = useQuery(api.functions.getCanvas, {});
@@ -93,20 +89,6 @@ const RPlaceCanvas: React.FC = () => {
   
   // Keybind mapping for color selection (1-9, a-z)
   const colorKeybinds = '123456789abcdefghijklmnopqrstuvwxyz';
-  
-  // Detect mobile device
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
-    };
-    
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    
-    return () => {
-      window.removeEventListener('resize', checkMobile);
-    };
-  }, []);
   
   // Helper function to get color index from key
   const getColorIndexFromKey = (key: string): number => {
@@ -147,7 +129,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
   return touches;
 };
 
-  
   // Utility functions
   const hexToRgb = (hex: string): ColorRGB => {
     // Trim whitespace and ensure we have a clean hex string
@@ -358,25 +339,9 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       setLastMouseY(touch.y);
       setMouseDownX(touch.x);
       setMouseDownY(touch.y);
-      setIsLongPress(false);
-      
-      // Start long press timer
-      const timer = setTimeout(() => {
-        setIsLongPress(true);
-        if (!isPanelOpen) {
-          openColorPanel();
-          // Add haptic feedback if available
-          if (navigator.vibrate) {
-            navigator.vibrate(50);
-          }
-        }
-      }, longPressThreshold);
-      
-      setLongPressTimer(timer);
       
     } else if (newTouches.length === 2) {
       // Two touches - start pinch zoom
-      clearLongPressTimer();
       setIsDragging(false);
       
       const distance = getTouchDistance(newTouches[0], newTouches[1]);
@@ -391,13 +356,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     }
   };
   
-  const clearLongPressTimer = () => {
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      setLongPressTimer(null);
-    }
-  };
-  
   const handleTouchMove = useCallback((e: TouchEvent) => {
     if (isLoading || !canvasWidth || !canvasHeight || !containerRef.current) return;
     
@@ -408,8 +366,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     
     if (newTouches.length === 1 && isDragging) {
       // Single touch panning
-      clearLongPressTimer(); // Cancel long press if moving
-      
       const touch = newTouches[0];
       const deltaX = touch.x - lastMouseX;
       const deltaY = touch.y - lastMouseY;
@@ -426,8 +382,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       
     } else if (newTouches.length === 2) {
       // Pinch zoom
-      clearLongPressTimer();
-      
       const distance = getTouchDistance(newTouches[0], newTouches[1]);
 
       
@@ -456,14 +410,13 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     if (isLoading || !canvasWidth || !canvasHeight || !containerRef.current) return;
     
     e.preventDefault();
-    clearLongPressTimer();
     
     const containerRect = containerRef.current.getBoundingClientRect();
     const remainingTouches = convertTouchList(e.touches, containerRect);
     
     if (remainingTouches.length === 0) {
       // All touches ended
-      if (isDragging && !isLongPress) {
+      if (isDragging) {
         setIsDragging(false);
         
         // Check if this was a tap (minimal movement)
@@ -481,7 +434,6 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         }
       }
       
-      setIsLongPress(false);
       setTouches([]);
       setLastTouchDistance(0);
       
@@ -497,11 +449,11 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     }
     
     setTouches(remainingTouches);
-  }, [isLoading, canvasWidth, canvasHeight, isDragging, isLongPress, touches, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, touches, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
   
-  // Mouse event handlers (for desktop)
+  // Mouse event handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     setIsAnimating(false);
     setIsDragging(true);
@@ -513,7 +465,7 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
   };
   
   const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight || !isDragging || isMobile) return;
+    if (isLoading || !canvasWidth || !canvasHeight || !isDragging) return;
     
     const deltaX = e.clientX - lastMouseX;
     const deltaY = e.clientY - lastMouseY;
@@ -527,10 +479,10 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     
     setLastMouseX(e.clientX);
     setLastMouseY(e.clientY);
-  }, [isLoading, canvasWidth, canvasHeight, isDragging, isMobile, lastMouseX, lastMouseY, panX, panY, zoom, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, lastMouseX, lastMouseY, panX, panY, zoom, constrainPan]);
   
   const handleMouseUp = useCallback((e: MouseEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     if (isDragging) {
       setIsDragging(false);
@@ -548,10 +500,10 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         animateToPixel(pixelCoords.x, pixelCoords.y);
       }
     }
-  }, [isLoading, canvasWidth, canvasHeight, isMobile, isDragging, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
+  }, [isLoading, canvasWidth, canvasHeight, isDragging, mouseDownX, mouseDownY, dragThreshold, animateToPixel, screenToPixel]);
   
   const handleWheel = useCallback((e: WheelEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     e.preventDefault();
     setIsAnimating(false);
@@ -575,10 +527,10 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
       setPanY(constrained.y);
       setZoom(newZoom);
     }
-  }, [isLoading, canvasWidth, canvasHeight, isMobile, zoom, panX, panY, zoomFactor, minZoom, maxZoom, constrainPan]);
+  }, [isLoading, canvasWidth, canvasHeight, zoom, panX, panY, zoomFactor, minZoom, maxZoom, constrainPan]);
   
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (isLoading || !canvasWidth || !canvasHeight || isMobile) return;
+    if (isLoading || !canvasWidth || !canvasHeight) return;
     
     // Check if this is a color selection key
     const colorIndex = getColorIndexFromKey(e.key);
@@ -641,7 +593,7 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
         }
         break;
     }
-  }, [isLoading, canvasWidth, canvasHeight, isMobile, getPositionCoords, animateToPixel, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel, colors, getColorIndexFromKey, selectColorByIndex]);
+  }, [isLoading, canvasWidth, canvasHeight, getPositionCoords, animateToPixel, zoomIn, zoomOut, isPanelOpen, selectedColor, placePixel, openColorPanel, closeColorPanel, colors, getColorIndexFromKey, selectColorByIndex]);
   
   // Initialize canvas from Convex data
   useEffect(() => {
@@ -784,47 +736,30 @@ const convertTouchList = (touchList: TouchList | React.TouchList, containerRect:
     container.addEventListener('touchmove', handleTouchMove, { passive: false });
     container.addEventListener('touchend', handleTouchEnd, { passive: false });
     
-    // Mouse wheel for desktop
-    if (!isMobile) {
-      container.addEventListener('wheel', handleWheel, { passive: false });
-    }
+    // Mouse wheel
+    container.addEventListener('wheel', handleWheel, { passive: false });
     
     return () => {
       container.removeEventListener('touchmove', handleTouchMove);
       container.removeEventListener('touchend', handleTouchEnd);
-      if (!isMobile) {
-        container.removeEventListener('wheel', handleWheel);
-      }
+      container.removeEventListener('wheel', handleWheel);
     };
-  }, [handleTouchMove, handleTouchEnd, handleWheel, isMobile]);
+  }, [handleTouchMove, handleTouchEnd, handleWheel]);
   
   useEffect(() => {
-    // Mouse events for desktop only
-    if (!isMobile) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    }
+    // Mouse events
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
     
-    // Keyboard events (desktop only, since mobile uses touch interface)
-    if (!isMobile) {
-      document.addEventListener('keydown', handleKeyDown);
-    }
+    // Keyboard events
+    document.addEventListener('keydown', handleKeyDown);
     
     return () => {
-      if (!isMobile) {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-        document.removeEventListener('keydown', handleKeyDown);
-      }
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleMouseMove, handleMouseUp, handleKeyDown, isMobile]);
-  
-  // Cleanup long press timer on unmount
-  useEffect(() => {
-    return () => {
-      clearLongPressTimer();
-    };
-  }, []);
+  }, [handleMouseMove, handleMouseUp, handleKeyDown]);
   
   // Only calculate position if we have valid canvas dimensions
   const currentPosition = canvasWidth && canvasHeight ? getPositionCoords() : { x: 0, y: 0 };
